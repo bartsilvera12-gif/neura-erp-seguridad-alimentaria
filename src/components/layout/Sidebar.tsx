@@ -148,6 +148,7 @@ const MENU_STRUCTURE: MenuItem[] = [
   },
   { key: "gastos", slug: "gastos", label: "Gastos", href: "/gastos", icon: Receipt },
   { key: "reportes", slug: "reportes", label: "Reportes", href: "/reportes", icon: BarChart3 },
+  { key: "documentos", slug: "documentos", label: "Documentos", href: "/documentos", icon: FileText },
   // Pagos oculto en instancia En lo de Mari (no usa este módulo).
   { key: "comisiones", slug: "comisiones", label: "Comisiones", href: "/comisiones", icon: Percent },
   {
@@ -200,7 +201,7 @@ const MENU_FAMILIES: { id: string; titulo: string; keys: string[] }[] = [
   { id: "inicio", titulo: "Inicio", keys: ["dashboard"] },
   { id: "comercial", titulo: "Comercial", keys: ["clientes", "crm", "gestion-clientes", "ventas", "presupuestos", "comisiones", "planes"] },
   { id: "finanzas", titulo: "Finanzas", keys: ["pagos", "gastos", "notas_credito", "reportes"] },
-  { id: "operaciones", titulo: "Operaciones", keys: ["inventario", "compras", "recetas", "proyectos"] },
+  { id: "operaciones", titulo: "Operaciones", keys: ["inventario", "compras", "recetas", "proyectos", "documentos"] },
   { id: "omnicanal", titulo: "Omnicanal", keys: ["conversaciones", "conversaciones-finalizadas", "historial-omnicanal", "monitoreo", "campanas"] },
   { id: "marketing", titulo: "Marketing y Automatización", keys: ["marketing", "marketing_ops", "sorteos"] },
   { id: "administracion", titulo: "Administración", keys: ["usuarios", "configuracion"] },

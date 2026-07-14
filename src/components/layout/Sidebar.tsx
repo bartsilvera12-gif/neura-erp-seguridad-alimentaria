@@ -16,10 +16,9 @@ import {
   Building2,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   Star,
   Sparkles,
-  PanelLeftClose,
-  PanelLeft,
   Search,
   Receipt,
   Megaphone,
@@ -681,25 +680,28 @@ export default function Sidebar() {
         />
       ) : null}
 
-      <motion.aside
+      <aside
         id="neura-sidebar"
-        initial={false}
-        animate={{ width: collapsed ? 80 : 260 }}
-        transition={{ duration: 0.2 }}
-        className={`zentra-sidebar-bg flex h-svh min-h-0 shrink-0 flex-col border-r border-[color:var(--zentra-sidebar-border)] lg:relative lg:z-auto lg:translate-x-0 lg:shadow-none ${
+        // Ancho animado por CSS puro (sin framer-motion en el shell).
+        // motion-safe respeta prefers-reduced-motion.
+        style={{ width: collapsed ? 80 : 260 }}
+        className={`zentra-sidebar-bg flex h-svh min-h-0 shrink-0 flex-col border-r border-[color:var(--zentra-sidebar-border)] motion-safe:transition-[width] motion-safe:duration-200 lg:relative lg:z-auto lg:translate-x-0 lg:shadow-none ${
           mobileSidebarOpen
             ? "fixed inset-y-0 left-0 z-50 translate-x-0 shadow-2xl transition-transform duration-200"
             : "fixed inset-y-0 left-0 z-50 -translate-x-full lg:translate-x-0 transition-transform duration-200"
         }`}
       >
-      {/* Logo oficial ZENTRA (blanco sobre azul marca) */}
-      <div className="flex h-[7.25rem] shrink-0 items-center justify-between gap-2 border-b border-[color:var(--zentra-sidebar-border)] bg-[color:var(--zentra-sidebar-elevated)]/35 px-3 py-2.5">
-        <Link href="/" className={`flex items-center justify-center min-w-0 flex-1 overflow-hidden`}>
+      {/* Logo: dos assets según estado.
+          - Expandido: /brand/zentra-logo-official.png (logo + texto)
+          - Colapsado: /brand/zentralogo.png (solo ícono) -> nítido en 44x44
+          Header centrado porque el toggle es una pestaña flotante en el borde. */}
+      <div className="flex h-[7.25rem] shrink-0 items-center justify-center gap-2 border-b border-[color:var(--zentra-sidebar-border)] bg-[color:var(--zentra-sidebar-elevated)]/35 px-3 py-2.5">
+        <Link href="/" className="flex items-center justify-center min-w-0 flex-1 overflow-hidden">
           <div
             className={`relative flex items-center justify-center ${collapsed ? "h-11 w-11" : "h-[4.5rem] w-full max-w-[200px]"}`}
           >
             <Image
-              src="/brand/zentra-logo-official.png"
+              src={collapsed ? "/brand/zentralogo.png" : "/brand/zentra-logo-official.png"}
               alt="ZENTRA"
               width={400}
               height={220}
@@ -709,15 +711,21 @@ export default function Sidebar() {
             />
           </div>
         </Link>
-        <button
-          type="button"
-          onClick={() => setCollapsed(!collapsed)}
-          className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-[color:var(--zentra-sidebar-hover)] hover:text-white"
-          aria-label={collapsed ? "Expandir sidebar" : "Colapsar sidebar"}
-        >
-          {collapsed ? <PanelLeft className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
-        </button>
       </div>
+
+      {/* Toggle flotante: pestaña circular en el borde derecho del sidebar.
+          Solo en desktop (lg+), donde aplica el colapso a 80px; en mobile el
+          sidebar es un drawer y no necesita pestaña. */}
+      <button
+        type="button"
+        onClick={() => setCollapsed(!collapsed)}
+        aria-label={collapsed ? "Expandir sidebar" : "Colapsar sidebar"}
+        title={collapsed ? "Expandir" : "Colapsar"}
+        style={{ backgroundColor: "#104A4E" }}
+        className="absolute top-[8rem] -right-3 z-50 hidden h-7 w-7 items-center justify-center rounded-full border border-[color:var(--zentra-sidebar-border)] text-white shadow-[0_4px_10px_rgba(0,0,0,0.35)] transition-transform hover:scale-105 lg:flex"
+      >
+        {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+      </button>
 
       {!collapsed && (
         <div className="shrink-0 border-b border-[color:var(--zentra-sidebar-border)] px-3 py-2.5">
@@ -864,7 +872,7 @@ export default function Sidebar() {
           </div>
         ) : null}
       </div>
-      </motion.aside>
+      </aside>
     </>
   );
 }

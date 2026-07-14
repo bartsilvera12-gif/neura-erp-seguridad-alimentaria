@@ -120,16 +120,16 @@ export default function Header() {
             className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 shadow-sm transition-all hover:border-[#4FAEB2]/60"
           >
             <div
-              className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-black"
-              style={{ boxShadow: "0 0 0 3px rgba(79, 174, 178, 0.25)" }}
+              className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white"
+              style={{ boxShadow: "0 0 0 3px rgba(52, 166, 74, 0.25)" }}
             >
               <Image
-                src="/neura-logo.png"
+                src="/brand/seguridad-alimentaria-isotipo.png"
                 alt="Seguridad Alimentaria"
                 width={72}
                 height={72}
                 sizes="36px"
-                className="h-full w-full object-contain p-0.5"
+                className="h-full w-full object-contain p-1"
                 priority
               />
             </div>

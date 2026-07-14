@@ -308,3 +308,49 @@ select:disabled {
 
 
 
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Animaciones de entrada (Documentos y futuras pantallas).
+
+   Curvas fuertes: las de CSS por defecto son flojas y se sienten sin intención.
+   Nada entra desde scale(0): en el mundo real las cosas no aparecen de la nada,
+   así que se arranca en 0.96 con opacidad 0.
+   ──────────────────────────────────────────────────────────────────────────── */
+@keyframes zentra-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes zentra-scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes zentra-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Filas de listado: entran escalonadas (delay por índice, seteado inline). */
+.zentra-row-in {
+  opacity: 0;
+  animation: zentra-fade-up 260ms cubic-bezier(0.23, 1, 0.32, 1) forwards;
+}
+
+/* Modal: escala desde el centro (no está anclado a un trigger). */
+.zentra-modal-in {
+  animation: zentra-scale-in 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.zentra-overlay-in {
+  animation: zentra-overlay-in 160ms ease-out;
+}
+
+/* Movimiento fuera; se conservan opacidad y color, que ayudan a comprender. */
+@media (prefers-reduced-motion: reduce) {
+  .zentra-row-in,
+  .zentra-modal-in,
+  .zentra-overlay-in {
+    animation: zentra-overlay-in 160ms ease-out forwards;
+  }
+}

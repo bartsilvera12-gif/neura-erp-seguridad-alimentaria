@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { FileText, Trash2, Upload, Download, Pencil, X } from "lucide-react";
+import { FileText, Trash2, Upload, Download, Pencil, X, Plus } from "lucide-react";
 import EdgeScrollArea from "@/components/ui/EdgeScrollArea";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { hoyAsuncionYmd } from "@/lib/fecha/asuncion";
+import { supabase } from "@/lib/supabase";
 
 interface Documento {
   id: string;
@@ -62,6 +63,8 @@ export default function DocumentosPage() {
   const [error, setError] = useState<string | null>(null);
   const [subiendo, setSubiendo] = useState(false);
   const [editando, setEditando] = useState<Documento | null>(null);
+  /** El alta vive en un modal, detrás del botón "Nuevo documento". */
+  const [modalAlta, setModalAlta] = useState(false);
 
   // Formulario de alta
   const [archivo, setArchivo] = useState<File | null>(null);
@@ -98,25 +101,62 @@ export default function DocumentosPage() {
     setDiasAviso("30");
   }
 
+  /**
+   * Subida en dos pasos:
+   *   1. El servidor firma una URL de subida (no recibe el archivo).
+   *   2. El navegador sube el archivo DIRECTO a Storage.
+   *   3. Recién ahí se crea la fila con el path.
+   *
+   * El archivo nunca pasa por la API: las serverless functions cortan el body
+   * a ~4,5 MB y un PDF de 15 MB moría en el camino.
+   */
   async function handleSubir(e: React.FormEvent) {
     e.preventDefault();
     if (!archivo || subiendo) return;
     setSubiendo(true);
     setError(null);
     try {
-      const fd = new FormData();
-      fd.append("archivo", archivo);
-      fd.append("nombre", nombre.trim() || archivo.name);
-      fd.append("descripcion", descripcion);
-      fd.append("categoria", categoria);
-      fd.append("fecha_vencimiento", vencimiento);
-      fd.append("dias_aviso_previo", diasAviso);
+      // 1. URL firmada
+      const resUrl = await fetchWithSupabaseSession("/api/documentos/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archivo_nombre: archivo.name, tamano_bytes: archivo.size }),
+      });
+      const jUrl = await resUrl.json();
+      if (!resUrl.ok || !jUrl?.success) {
+        throw new Error(jUrl?.error ?? "No se pudo preparar la subida.");
+      }
+      const { path, token, bucket } = jUrl.data as { path: string; token: string; bucket: string };
 
-      const res = await fetchWithSupabaseSession("/api/documentos", { method: "POST", body: fd });
+      // 2. Subida directa del navegador a Storage
+      const { error: upErr } = await supabase.storage
+        .from(bucket)
+        .uploadToSignedUrl(path, token, archivo, {
+          contentType: archivo.type || "application/octet-stream",
+        });
+      if (upErr) throw new Error(`No se pudo subir el archivo: ${upErr.message}`);
+
+      // 3. Metadatos
+      const res = await fetchWithSupabaseSession("/api/documentos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          archivo_path: path,
+          archivo_nombre: archivo.name,
+          mime_type: archivo.type || null,
+          tamano_bytes: archivo.size,
+          nombre: nombre.trim() || archivo.name,
+          descripcion,
+          categoria,
+          fecha_vencimiento: vencimiento,
+          dias_aviso_previo: diasAviso,
+        }),
+      });
       const j = await res.json();
-      if (!res.ok || !j?.success) throw new Error(j?.error ?? "No se pudo subir el documento.");
+      if (!res.ok || !j?.success) throw new Error(j?.error ?? "No se pudo guardar el documento.");
 
       limpiarForm();
+      setModalAlta(false);
       await cargar();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al subir");
@@ -174,21 +214,36 @@ export default function DocumentosPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <div className="flex items-center gap-2">
-          <span
-            aria-hidden="true"
-            className="inline-block h-1.5 w-1.5 rounded-full bg-[#4FAEB2]"
-            style={{ boxShadow: "0 0 0 3px rgba(79, 174, 178, 0.18)" }}
-          />
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#4FAEB2]">
-            Zentra · Operaciones
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className="inline-block h-1.5 w-1.5 rounded-full bg-[#4FAEB2]"
+              style={{ boxShadow: "0 0 0 3px rgba(79, 174, 178, 0.18)" }}
+            />
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#4FAEB2]">
+              Zentra · Operaciones
+            </p>
+          </div>
+          <h1 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Documentos</h1>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Archivos con fecha de vencimiento y aviso previo en la campanita
           </p>
         </div>
-        <h1 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Documentos</h1>
-        <p className="mt-0.5 text-xs text-slate-500">
-          Archivos con fecha de vencimiento y aviso previo en la campanita
-        </p>
+
+        <button
+          type="button"
+          onClick={() => {
+            limpiarForm();
+            setError(null);
+            setModalAlta(true);
+          }}
+          className="inline-flex items-center gap-2 rounded-lg bg-[#4FAEB2] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#3F8E91]"
+        >
+          <Plus className="h-4 w-4" />
+          Nuevo documento
+        </button>
       </div>
 
       {error && (
@@ -196,102 +251,6 @@ export default function DocumentosPage() {
           {error}
         </div>
       )}
-
-      {/* Alta de documento */}
-      <form onSubmit={handleSubir} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <p className="mb-4 text-sm font-semibold text-slate-900">Subir documento</p>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          <div className="lg:col-span-2">
-            <label className={labelClass} htmlFor="archivo">Archivo</label>
-            <input
-              id="archivo"
-              type="file"
-              required
-              onChange={(e) => {
-                const f = e.target.files?.[0] ?? null;
-                setArchivo(f);
-                if (f && !nombre.trim()) setNombre(f.name.replace(/\.[^.]+$/, ""));
-              }}
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-[#4FAEB2] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
-            />
-            <p className="mt-1 text-xs text-slate-400">Cualquier tipo de archivo, hasta 25 MB.</p>
-          </div>
-
-          <div>
-            <label className={labelClass} htmlFor="nombre">Nombre</label>
-            <input
-              id="nombre"
-              className={inputClass}
-              value={nombre}
-              onChange={(e) => setNombre(e.target.value)}
-              placeholder="Ej: Habilitación municipal"
-            />
-          </div>
-
-          <div>
-            <label className={labelClass} htmlFor="categoria">Categoría</label>
-            <input
-              id="categoria"
-              className={inputClass}
-              value={categoria}
-              onChange={(e) => setCategoria(e.target.value)}
-              placeholder="Ej: Certificados"
-            />
-          </div>
-
-          <div>
-            <label className={labelClass} htmlFor="vencimiento">Fecha de vencimiento</label>
-            <input
-              id="vencimiento"
-              type="date"
-              className={inputClass}
-              value={vencimiento}
-              onChange={(e) => setVencimiento(e.target.value)}
-            />
-            <p className="mt-1 text-xs text-slate-400">Opcional: dejalo vacío si no vence.</p>
-          </div>
-
-          <div>
-            <label className={labelClass} htmlFor="dias">Avisar días antes</label>
-            <input
-              id="dias"
-              type="number"
-              min={0}
-              max={365}
-              className={inputClass}
-              value={diasAviso}
-              onChange={(e) => setDiasAviso(e.target.value)}
-              disabled={!vencimiento}
-            />
-            <p className="mt-1 text-xs text-slate-400">
-              La campanita avisa desde {diasAviso || "0"} días antes del vencimiento.
-            </p>
-          </div>
-
-          <div className="md:col-span-2 lg:col-span-3">
-            <label className={labelClass} htmlFor="descripcion">Descripción</label>
-            <textarea
-              id="descripcion"
-              rows={2}
-              className={inputClass}
-              value={descripcion}
-              onChange={(e) => setDescripcion(e.target.value)}
-            />
-          </div>
-        </div>
-
-        <div className="mt-4 flex justify-end">
-          <button
-            type="submit"
-            disabled={!archivo || subiendo}
-            className="inline-flex items-center gap-2 rounded-lg bg-[#4FAEB2] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#3F8E91] disabled:opacity-50"
-          >
-            <Upload className="h-4 w-4" />
-            {subiendo ? "Subiendo…" : "Subir documento"}
-          </button>
-        </div>
-      </form>
 
       {/* Listado */}
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -380,6 +339,127 @@ export default function DocumentosPage() {
           </table>
         </EdgeScrollArea>
       </div>
+
+      {/* Modal de alta */}
+      {modalAlta && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 py-10">
+          <form
+            onSubmit={handleSubir}
+            className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-5 shadow-2xl"
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <p className="text-sm font-semibold text-slate-900">Nuevo documento</p>
+              <button
+                type="button"
+                onClick={() => setModalAlta(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <label className={labelClass} htmlFor="archivo">Archivo</label>
+                <input
+                  id="archivo"
+                  type="file"
+                  required
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] ?? null;
+                    setArchivo(f);
+                    if (f && !nombre.trim()) setNombre(f.name.replace(/\.[^.]+$/, ""));
+                  }}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-[#4FAEB2] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
+                />
+                <p className="mt-1 text-xs text-slate-400">Cualquier tipo de archivo, hasta 25 MB.</p>
+              </div>
+
+              <div>
+                <label className={labelClass} htmlFor="nombre">Nombre</label>
+                <input
+                  id="nombre"
+                  className={inputClass}
+                  value={nombre}
+                  onChange={(e) => setNombre(e.target.value)}
+                  placeholder="Ej: Habilitación municipal"
+                />
+              </div>
+
+              <div>
+                <label className={labelClass} htmlFor="categoria">Categoría</label>
+                <input
+                  id="categoria"
+                  className={inputClass}
+                  value={categoria}
+                  onChange={(e) => setCategoria(e.target.value)}
+                  placeholder="Ej: Certificados"
+                />
+              </div>
+
+              <div>
+                <label className={labelClass} htmlFor="vencimiento">Fecha de vencimiento</label>
+                <input
+                  id="vencimiento"
+                  type="date"
+                  className={inputClass}
+                  value={vencimiento}
+                  onChange={(e) => setVencimiento(e.target.value)}
+                />
+                <p className="mt-1 text-xs text-slate-400">Opcional: dejalo vacío si no vence.</p>
+              </div>
+
+              <div>
+                <label className={labelClass} htmlFor="dias">Avisar días antes</label>
+                <input
+                  id="dias"
+                  type="number"
+                  min={0}
+                  max={365}
+                  className={inputClass}
+                  value={diasAviso}
+                  onChange={(e) => setDiasAviso(e.target.value)}
+                  disabled={!vencimiento}
+                />
+                <p className="mt-1 text-xs text-slate-400">
+                  {vencimiento
+                    ? `La campanita avisa desde ${diasAviso || "0"} días antes.`
+                    : "Se habilita al poner una fecha de vencimiento."}
+                </p>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className={labelClass} htmlFor="descripcion">Descripción</label>
+                <textarea
+                  id="descripcion"
+                  rows={2}
+                  className={inputClass}
+                  value={descripcion}
+                  onChange={(e) => setDescripcion(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setModalAlta(false)}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={!archivo || subiendo}
+                className="inline-flex items-center gap-2 rounded-lg bg-[#4FAEB2] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#3F8E91] disabled:opacity-50"
+              >
+                <Upload className="h-4 w-4" />
+                {subiendo ? "Subiendo…" : "Subir documento"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Modal de edición */}
       {editando && (

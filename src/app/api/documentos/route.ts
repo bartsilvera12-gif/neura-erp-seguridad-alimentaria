@@ -2,12 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantSupabaseFromAuth } from "@/lib/supabase/tenant-api";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
-import {
-  DOCUMENTOS_BUCKET,
-  MAX_DOCUMENTO_BYTES,
-  buildDocumentoPath,
-  ensureDocumentosBucket,
-} from "@/lib/documentos/storage";
+import { DOCUMENTOS_BUCKET, documentoPathEsDeEmpresa } from "@/lib/documentos/storage";
 
 const COLS =
   "id, nombre, descripcion, categoria, archivo_path, archivo_nombre, mime_type, " +
@@ -44,8 +39,15 @@ export async function GET(request: NextRequest) {
 }
 
 /**
- * POST /api/documentos — sube un archivo y crea el documento.
- * Body: multipart/form-data con `archivo` + campos del formulario.
+ * POST /api/documentos — crea el documento para un archivo YA subido a Storage.
+ *
+ * El archivo no pasa por acá: el navegador lo sube directo con la URL firmada
+ * de /api/documentos/upload-url (las serverless functions cortan el body a
+ * ~4,5 MB, así que un PDF de 15 MB nunca llegaría). Este endpoint solo guarda
+ * los metadatos y el `path` que devolvió aquel.
+ *
+ * Body JSON: { archivo_path, archivo_nombre, mime_type, tamano_bytes, nombre,
+ *              descripcion, categoria, fecha_vencimiento, dias_aviso_previo }
  */
 export async function POST(request: NextRequest) {
   try {
@@ -53,42 +55,32 @@ export async function POST(request: NextRequest) {
     if (!ctx) return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
     const { supabase, auth } = ctx;
 
-    const form = await request.formData();
-    const archivo = form.get("archivo");
-    if (!(archivo instanceof File) || archivo.size === 0) {
+    const body = (await request.json()) as Record<string, unknown>;
+
+    const archivoPath = String(body.archivo_path ?? "").trim();
+    const archivoNombre = String(body.archivo_nombre ?? "").trim();
+    if (!archivoPath || !archivoNombre) {
       return NextResponse.json(errorResponse("Falta el archivo."), { status: 400 });
     }
-    if (archivo.size > MAX_DOCUMENTO_BYTES) {
-      return NextResponse.json(
-        errorResponse(`El archivo supera el máximo de ${Math.round(MAX_DOCUMENTO_BYTES / 1024 / 1024)} MB.`),
-        { status: 400 }
-      );
+    // El path lo emitió upload-url para ESTA empresa; si no coincide, alguien lo
+    // manipuló para escribir metadatos sobre el archivo de otro tenant.
+    if (!documentoPathEsDeEmpresa(archivoPath, auth.empresa_id)) {
+      return NextResponse.json(errorResponse(API_ERRORS.FORBIDDEN), { status: 403 });
     }
 
-    const nombre = String(form.get("nombre") ?? "").trim() || archivo.name;
-    const descripcion = String(form.get("descripcion") ?? "").trim() || null;
-    const categoria = String(form.get("categoria") ?? "").trim() || null;
+    const nombre = String(body.nombre ?? "").trim() || archivoNombre;
+    const descripcion = String(body.descripcion ?? "").trim() || null;
+    const categoria = String(body.categoria ?? "").trim() || null;
+    const mimeType = String(body.mime_type ?? "").trim() || null;
 
-    const vencRaw = String(form.get("fecha_vencimiento") ?? "").trim();
+    const tamanoNum = Number(body.tamano_bytes ?? 0);
+    const tamano = Number.isFinite(tamanoNum) && tamanoNum > 0 ? Math.round(tamanoNum) : null;
+
+    const vencRaw = String(body.fecha_vencimiento ?? "").trim();
     const fechaVencimiento = /^\d{4}-\d{2}-\d{2}$/.test(vencRaw) ? vencRaw : null;
 
-    const diasRaw = parseInt(String(form.get("dias_aviso_previo") ?? ""), 10);
+    const diasRaw = parseInt(String(body.dias_aviso_previo ?? ""), 10);
     const diasAviso = Number.isFinite(diasRaw) ? Math.min(365, Math.max(0, diasRaw)) : 30;
-
-    await ensureDocumentosBucket(supabase);
-
-    const path = buildDocumentoPath(auth.empresa_id, crypto.randomUUID(), archivo.name);
-    const bytes = new Uint8Array(await archivo.arrayBuffer());
-
-    const { error: upErr } = await supabase.storage
-      .from(DOCUMENTOS_BUCKET)
-      .upload(path, bytes, {
-        contentType: archivo.type || "application/octet-stream",
-        upsert: false,
-      });
-    if (upErr) {
-      return NextResponse.json(errorResponse(`No se pudo subir el archivo: ${upErr.message}`), { status: 500 });
-    }
 
     const { data, error } = await supabase
       .from("documentos")
@@ -97,10 +89,10 @@ export async function POST(request: NextRequest) {
         nombre,
         descripcion,
         categoria,
-        archivo_path: path,
-        archivo_nombre: archivo.name,
-        mime_type: archivo.type || null,
-        tamano_bytes: archivo.size,
+        archivo_path: archivoPath,
+        archivo_nombre: archivoNombre,
+        mime_type: mimeType,
+        tamano_bytes: tamano,
         fecha_vencimiento: fechaVencimiento,
         dias_aviso_previo: diasAviso,
         subido_por: auth.usuarioCatalogId ?? null,
@@ -109,8 +101,9 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (error) {
-      // Rollback del archivo: si no se pudo guardar la fila, no dejar huérfano.
-      await supabase.storage.from(DOCUMENTOS_BUCKET).remove([path]);
+      // Si no se pudo guardar la fila, borrar el archivo: sin fila que lo
+      // referencie quedaría huérfano en Storage para siempre.
+      await supabase.storage.from(DOCUMENTOS_BUCKET).remove([archivoPath]);
       return NextResponse.json(errorResponse(error.message), { status: 500 });
     }
 

@@ -59,7 +59,10 @@ export default function InventarioPage() {
   const [filtroValuacion,  setFiltroValuacion]  = useState<MetodoValuacion | "">("");
   const [filtroUbicacion,  setFiltroUbicacion]  = useState<string>(""); // "", "__sin__" o id
   const [filtroTipo,       setFiltroTipo]       = useState<"todos" | "vendibles" | "insumos" | "mixtos">("todos");
-  const [tab,              setTab]               = useState<"reventa" | "menu" | "materia">("reventa");
+  // Esta instancia solo comercializa productos de REVENTA: el tab queda fijo y
+  // la barra de pestañas (Reventa | Menú | Materia prima) no se renderiza.
+  // Para reactivarlos, volver a `useState` y restaurar la <nav> de tabs.
+  const tab = "reventa" as "reventa" | "menu" | "materia";
   const [cargandoLista,    setCargandoLista]     = useState(true);
   const [soloStockBajo,    setSoloStockBajo]    = useState(false);
 
@@ -244,32 +247,7 @@ export default function InventarioPage() {
         </div>
       </div>
 
-      {/* Tabs gastronómicos (filtran por tipo de producto) */}
-      <div className="border-b border-gray-200">
-        <nav className="-mb-px flex gap-6 overflow-x-auto" aria-label="Tabs">
-          {([
-            { id: "reventa", label: "Reventa", subtitle: "Productos comprados y revendidos" },
-            { id: "menu",    label: "Menú",    subtitle: "Productos preparados por el local" },
-            { id: "materia", label: "Materia prima", subtitle: "Insumos para costeo/recetas" },
-          ] as const).map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className={`whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium transition-colors ${
-                tab === t.id
-                  ? "border-amber-500 text-amber-600"
-                  : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-              }`}
-              title={t.subtitle}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
-      </div>
-
-      {/* Resumen por pestaña */}
+      {/* Resumen */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard compact label="Total productos" value={String(resumen.total)} accent
           hint={tab === "reventa" ? "Reventa" : tab === "menu" ? "Menú" : "Materia prima"} />

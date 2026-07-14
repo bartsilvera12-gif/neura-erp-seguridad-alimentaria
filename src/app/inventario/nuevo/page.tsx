@@ -43,7 +43,7 @@ export default function NuevoProductoPage() {
     cantidad_minima_mayorista: "",
     stock_actual: "",
     stock_minimo: "",
-    unidad_medida: "",
+    unidad_medida: "UNIDAD",
     metodo_valuacion: "CPP" as MetodoValuacion,
     tipo_iva: "10%" as TipoIvaProducto,
   });
@@ -61,28 +61,14 @@ export default function NuevoProductoPage() {
   const [esVendible, setEsVendible] = useState(true);
   const [esInsumo, setEsInsumo] = useState(false);
 
-  // Selector inicial de tipo gastronómico — aplica presets a los flags
-  type TipoGastro = "reventa" | "menu" | "materia" | null;
-  const [tipoGastro, setTipoGastro] = useState<TipoGastro>(null);
-  function aplicarTipoGastro(tipo: Exclude<TipoGastro, null>) {
-    setTipoGastro(tipo);
-    if (tipo === "reventa") {
-      setEsVendible(true);
-      setEsInsumo(false);
-      setControlaStock(true);
-      setForm((prev) => ({ ...prev, unidad_medida: prev.unidad_medida || "UNIDAD" }));
-    } else if (tipo === "menu") {
-      setEsVendible(true);
-      setEsInsumo(false);
-      setControlaStock(false);
-      setForm((prev) => ({ ...prev, unidad_medida: prev.unidad_medida || "UNIDAD" }));
-    } else {
-      setEsVendible(false);
-      setEsInsumo(true);
-      setControlaStock(false);
-      setForm((prev) => ({ ...prev, unidad_medida: prev.unidad_medida || "G" }));
-    }
-  }
+  // Tipo de producto: esta instancia solo comercializa productos de REVENTA
+  // (se compran y se venden tal cual, controlan stock). Antes había un paso 0
+  // que dejaba elegir entre reventa / menú / materia prima; se eliminó junto
+  // con los presets de flags, y el tipo queda fijo. Los flags de reventa son
+  // los defaults de arriba: esVendible=true, esInsumo=false, controlaStock=true.
+  // Para reactivar menú / materia prima, ver el historial de git de este archivo.
+  type TipoGastro = "reventa" | "menu" | "materia";
+  const tipoGastro = "reventa" as TipoGastro;
 
   // Configuración gastronómica
   const [controlaStock, setControlaStock] = useState(true);
@@ -396,69 +382,8 @@ export default function NuevoProductoPage() {
     "w-full border border-slate-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-[#0EA5E9] focus:outline-none bg-white text-sm";
   const labelClass = "block text-sm font-medium text-slate-700 mb-2";
 
-  // Paso 0: selector inicial de tipo de producto
-  if (tipoGastro === null) {
-    return (
-      <div className="space-y-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-800">Nuevo producto</h1>
-          <p className="text-gray-600">¿Qué tipo de producto vas a cargar?</p>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-5xl">
-          {([
-            {
-              tipo: "reventa" as const,
-              titulo: "Producto de reventa",
-              Icon: ShoppingBag,
-              iconColor: "text-sky-600",
-              ejemplo: "Gaseosas, agua, jugos, postres comprados",
-              descripcion: "Se compra y se vende tal cual. Controla stock y descuenta al vender.",
-              acento: "border-sky-300 bg-sky-50/40 hover:border-sky-500",
-            },
-            {
-              tipo: "menu" as const,
-              titulo: "Producto del menú",
-              Icon: ClipboardList,
-              iconColor: "text-amber-600",
-              ejemplo: "Pizzas, lomitos, hamburguesas, combos",
-              descripcion: "Producto preparado por el local. No descuenta stock directo (usá receta para costeo).",
-              acento: "border-amber-300 bg-amber-50/40 hover:border-amber-500",
-            },
-            {
-              tipo: "materia" as const,
-              titulo: "Materia prima / insumo",
-              Icon: Boxes,
-              iconColor: "text-emerald-600",
-              ejemplo: "Harina, queso, salsa, carne, envases",
-              descripcion: "Insumo para recetas. Sólo se usa para costear productos del menú.",
-              acento: "border-emerald-300 bg-emerald-50/40 hover:border-emerald-500",
-            },
-          ]).map((opt) => (
-            <button
-              key={opt.tipo}
-              type="button"
-              onClick={() => aplicarTipoGastro(opt.tipo)}
-              className={`text-left rounded-xl border-2 ${opt.acento} p-5 transition-all hover:shadow-md`}
-            >
-              <opt.Icon className={`w-7 h-7 mb-2 ${opt.iconColor}`} />
-              <div className="text-base font-semibold text-slate-900">{opt.titulo}</div>
-              <div className="mt-1 text-xs italic text-slate-500">Ej: {opt.ejemplo}</div>
-              <div className="mt-3 text-sm text-slate-700">{opt.descripcion}</div>
-            </button>
-          ))}
-        </div>
-        <div>
-          <button
-            type="button"
-            onClick={() => router.push("/inventario")}
-            className="text-sm text-gray-500 hover:text-gray-700"
-          >
-            ← Cancelar
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // El paso 0 (selector de tipo: reventa / menú / materia prima) se eliminó:
+  // esta instancia solo vende productos de reventa y el tipo queda fijo.
 
   const summary = TIPO_SUMMARY[tipoGastro];
   const showStock = tipoGastro === "reventa";
@@ -478,13 +403,6 @@ export default function NuevoProductoPage() {
             <div className="text-base font-semibold text-slate-900">{summary.titulo}</div>
             <div className="text-sm text-slate-600 mt-0.5">{summary.descripcion}</div>
           </div>
-          <button
-            type="button"
-            onClick={() => setTipoGastro(null)}
-            className="text-xs text-amber-700 hover:text-amber-900 underline shrink-0"
-          >
-            Cambiar tipo
-          </button>
         </div>
       </div>
 

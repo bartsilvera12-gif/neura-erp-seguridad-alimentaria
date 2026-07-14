@@ -8,6 +8,7 @@ import ProductPickerModal, { type ProductoPickerItem, type AgregarVentaPayload }
 import { saveVenta, type FaltanteStock } from "@/lib/ventas/storage";
 import { getProductos } from "@/lib/inventario/storage";
 import { generarYAbrirRecibo } from "@/lib/recibos/client";
+import { productoMatchesQuery } from "@/lib/productos/token-search";
 import type { TipoIvaVenta, TipoVenta, MonedaVenta, LineaVenta, MetodoPago, TipoPrecioVenta } from "@/lib/ventas/types";
 import type { Producto } from "@/lib/inventario/types";
 
@@ -469,20 +470,14 @@ export default function NuevaVentaPage() {
   const clienteSel = clientes.find((c) => c.id === clienteId) ?? null;
   const clientesFiltrados = (clienteQuery.trim() === ""
     ? clientes
-    : clientes.filter((c) => {
-        const q = clienteQuery.toLowerCase();
-        return c.label.toLowerCase().includes(q) || (c.ruc ?? "").toLowerCase().includes(q);
-      })
+    : clientes.filter((c) => productoMatchesQuery(clienteQuery, c.label, c.ruc))
   ).slice(0, 50);
 
   // Cobro: entidad seleccionada + filtrado por código/nombre.
   const entidadSel = entidades.find((e) => e.id === pagoEntidadId) ?? null;
   const entidadesFiltradas = (entidadQuery.trim() === ""
     ? entidades
-    : entidades.filter((e) => {
-        const q = entidadQuery.toLowerCase();
-        return e.nombre.toLowerCase().includes(q) || (e.codigo ?? "").toLowerCase().includes(q);
-      })
+    : entidades.filter((e) => productoMatchesQuery(entidadQuery, e.nombre, e.codigo))
   ).slice(0, 50);
 
   // Vuelto (solo informativo, no se persiste)
@@ -494,10 +489,7 @@ export default function NuevaVentaPage() {
   const productosVendibles = productos.filter((p) => p.es_vendible !== false);
   const comboFiltrados = comboQuery.trim() === ""
     ? productosVendibles
-    : productosVendibles.filter((p) => {
-        const q = comboQuery.toLowerCase();
-        return p.nombre.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q);
-      });
+    : productosVendibles.filter((p) => productoMatchesQuery(comboQuery, p.nombre, p.sku));
 
   // ── Selección de un producto desde el combobox ────────────────────────────
   function seleccionarProducto(p: Producto) {

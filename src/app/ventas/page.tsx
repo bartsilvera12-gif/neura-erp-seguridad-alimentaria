@@ -11,6 +11,8 @@ import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session"
 import { getVentas } from "@/lib/ventas/storage";
 import PedidosPendientesCaja from "./PedidosPendientesCaja";
 import AnularVentaModal from "./AnularVentaModal";
+import CajaControlPanel from "@/components/caja/CajaControlPanel";
+import { productoMatchesQuery } from "@/lib/productos/token-search";
 import { esMismoDiaAsuncion } from "@/lib/fecha/asuncion";
 import type { Venta, TipoVenta, TipoIvaVenta } from "@/lib/ventas/types";
 
@@ -186,21 +188,20 @@ export default function VentasPage() {
   const metricas = calcularMetricas(todas);
 
   const filtradas = todas.filter((v) => {
-    // Búsqueda global: número de control, CLIENTE, nombre o SKU de cualquier ítem.
-    // Se prioriza para que buscar el nombre del cliente sea el caso principal
-    // (pedido explícito del cliente: "filtrar por cliente en vez de productos").
-    if (busqueda.trim() !== "") {
-      const t = busqueda.toLowerCase().trim();
-      const coincide =
-        (v.cliente_nombre ?? "").toLowerCase().includes(t) ||
-        v.numero_control.toLowerCase().includes(t) ||
-        v.items.some(
-          (i) =>
-            i.producto_nombre.toLowerCase().includes(t) ||
-            i.sku.toLowerCase().includes(t)
-        );
-      if (!coincide) return false;
-    }
+    // Búsqueda por tokens: cada palabra debe aparecer en alguno de los campos,
+    // en cualquier orden ("5x70 tornillo" encuentra "Tornillo Fix 5x70").
+    // Campos: CLIENTE, número de control, nombre y SKU de cualquier ítem.
+    if (
+      busqueda.trim() !== "" &&
+      !productoMatchesQuery(
+        busqueda,
+        v.cliente_nombre,
+        v.numero_control,
+        ...v.items.map((i) => i.producto_nombre),
+        ...v.items.map((i) => i.sku)
+      )
+    )
+      return false;
     // Tipo de venta
     if (filtroTipo !== "" && v.tipo_venta !== filtroTipo) return false;
     // IVA: coincide si al menos un ítem tiene ese tipo
@@ -228,6 +229,8 @@ export default function VentasPage() {
         <h1 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Caja</h1>
         <p className="mt-0.5 text-xs text-slate-500">Cobro, facturación y cierre de pedidos</p>
       </div>
+
+      <CajaControlPanel />
 
       <PedidosPendientesCaja />
 

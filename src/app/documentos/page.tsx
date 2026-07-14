@@ -5,7 +5,6 @@ import { FileText, Trash2, Upload, Download, Pencil, X, Plus } from "lucide-reac
 import EdgeScrollArea from "@/components/ui/EdgeScrollArea";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { hoyAsuncionYmd } from "@/lib/fecha/asuncion";
-import { supabase } from "@/lib/supabase";
 
 interface Documento {
   id: string;
@@ -126,15 +125,20 @@ export default function DocumentosPage() {
       if (!resUrl.ok || !jUrl?.success) {
         throw new Error(jUrl?.error ?? "No se pudo preparar la subida.");
       }
-      const { path, token, bucket } = jUrl.data as { path: string; token: string; bucket: string };
+      const { path, uploadUrl } = jUrl.data as { path: string; uploadUrl: string };
 
-      // 2. Subida directa del navegador a Storage
-      const { error: upErr } = await supabase.storage
-        .from(bucket)
-        .uploadToSignedUrl(path, token, archivo, {
-          contentType: archivo.type || "application/octet-stream",
-        });
-      if (upErr) throw new Error(`No se pudo subir el archivo: ${upErr.message}`);
+      // 2. Subida directa del navegador a Storage, con PUT nativo.
+      //    No se usa supabase-js acá: su uploadToSignedUrl manda el header
+      //    `x-upsert`, que el CORS del Storage no permite, y el preflight falla
+      //    con "Failed to fetch". Content-Type sí está en la lista permitida.
+      const up = await fetch(uploadUrl, {
+        method: "PUT",
+        body: archivo,
+        headers: { "Content-Type": archivo.type || "application/octet-stream" },
+      });
+      if (!up.ok) {
+        throw new Error(`No se pudo subir el archivo (${up.status}).`);
+      }
 
       // 3. Metadatos
       const res = await fetchWithSupabaseSession("/api/documentos", {

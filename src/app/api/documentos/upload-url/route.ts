@@ -49,15 +49,24 @@ export async function POST(request: NextRequest) {
       .from(DOCUMENTOS_BUCKET)
       .createSignedUploadUrl(path);
 
-    if (error || !data?.token) {
+    if (error || !data?.signedUrl) {
       return NextResponse.json(
-        errorResponse(`No se pudo preparar la subida: ${error?.message ?? "sin token"}`),
+        errorResponse(`No se pudo preparar la subida: ${error?.message ?? "sin URL"}`),
         { status: 500 }
       );
     }
 
+    // Se devuelve la URL absoluta para que el cliente haga un PUT nativo.
+    // Ojo: NO usar supabase-js (uploadToSignedUrl) en el browser — manda el
+    // header `x-upsert`, que el CORS del Storage no incluye en
+    // Access-Control-Allow-Headers, y el preflight falla con "Failed to fetch".
+    const base = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+    const uploadUrl = data.signedUrl.startsWith("http")
+      ? data.signedUrl
+      : `${base}${data.signedUrl}`;
+
     return NextResponse.json(
-      successResponse({ path, token: data.token, bucket: DOCUMENTOS_BUCKET })
+      successResponse({ path, uploadUrl, bucket: DOCUMENTOS_BUCKET })
     );
   } catch (err) {
     console.error("[/api/documentos/upload-url]", err instanceof Error ? err.message : err);

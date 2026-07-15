@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Image from "next/image";
+import { Search, Plus, Minus, Trash2, Image as ImageIcon } from "lucide-react";
 import NuevoClienteRapidoModal, { type NuevoClienteCreado } from "./NuevoClienteRapidoModal";
 import { useRouter } from "next/navigation";
 import MontoInput from "@/components/ui/MontoInput";
@@ -9,13 +11,36 @@ import { saveVenta, type FaltanteStock } from "@/lib/ventas/storage";
 import { getProductos } from "@/lib/inventario/storage";
 import { generarYAbrirRecibo } from "@/lib/recibos/client";
 import { productoMatchesQuery } from "@/lib/productos/token-search";
+import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import type { TipoIvaVenta, TipoVenta, MonedaVenta, LineaVenta, MetodoPago, TipoPrecioVenta } from "@/lib/ventas/types";
 import type { Producto } from "@/lib/inventario/types";
+import type { MetodoValuacion } from "@/lib/inventario/types";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function formatGs(valor: number) {
   return `Gs. ${Math.round(valor).toLocaleString("es-PY")}`;
+}
+
+/** Miniatura del producto con fallback a un ícono cuando no hay imagen. */
+function ProductoThumb({ url, alt }: { url?: string | null; alt: string }) {
+  if (url) {
+    return (
+      <Image
+        src={url}
+        alt={alt}
+        width={36}
+        height={36}
+        className="h-9 w-9 shrink-0 rounded-md border border-slate-200 object-cover"
+        unoptimized
+      />
+    );
+  }
+  return (
+    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-300">
+      <ImageIcon className="h-4 w-4" />
+    </span>
+  );
 }
 
 /**
@@ -41,16 +66,6 @@ function precioPorTipo(p: Producto, tipo: TipoPrecioVenta): number {
   if (tipo === "costo") return p.costo_promedio ?? 0; // histórico: ya no se ofrece en la UI
   return p.precio_venta;
 }
-
-/** Tipos de precio ofrecidos en la UI (sin 'costo', que queda solo como histórico). */
-const TIPOS_PRECIO_UI: TipoPrecioVenta[] = ["minorista", "mayorista", "distribuidor"];
-
-const tipoPrecioLabel: Record<TipoPrecioVenta, string> = {
-  minorista: "Minorista",
-  mayorista: "Mayorista",
-  distribuidor: "Distribuidor",
-  costo: "Al costo",
-};
 
 // ── Estilos ────────────────────────────────────────────────────────────────────
 
@@ -100,12 +115,6 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-const ivaLabel: Record<TipoIvaVenta, string> = {
-  EXENTA: "Exenta",
-  "5%":   "5%",
-  "10%":  "10%",
-};
-
 // ── Componente principal ───────────────────────────────────────────────────────
 
 export default function NuevaVentaPage() {
@@ -151,9 +160,14 @@ export default function NuevaVentaPage() {
    *    /facturas/[id]?auto=1 (arranca pipeline SIFEN).
    *  - "ticket": NO emite factura ERP. Se registra la venta y se imprime el
    *    ticket comanda; queda un modal post-venta con acciones opcionales.
-   * Default "factura" para no cambiar el comportamiento existente por accidente.
+   *
+   * Esta instancia AÚN NO tiene SIFEN configurado: el tipo queda fijo en
+   * "ticket" y el selector de documento no se muestra (emitir factura arrancaría
+   * un pipeline que falla sin certificado/timbrado). Para reactivarlo cuando
+   * configuren la facturación electrónica: volver el default a "factura" y
+   * restaurar el <SegmentedControl> de documento (ver historial de git).
    */
-  const [tipoDocumento, setTipoDocumento] = useState<"factura" | "ticket">("factura");
+  const [tipoDocumento] = useState<"factura" | "ticket">("ticket");
 
   // Cliente (opcional). Si se selecciona, se envía cliente_id al crear la venta.
   type ClienteLite = { id: string; label: string; ruc: string | null; usa_nota_remision: boolean; nivel_precio: "minorista" | "mayorista" | "distribuidor" };
@@ -180,17 +194,13 @@ export default function NuevaVentaPage() {
   const [cobroModalOpen, setCobroModalOpen] = useState(false);
   const [entidadQuery, setEntidadQuery] = useState("");
 
-  // ── Línea en construcción ─────────────────────────────────────────────────
-  const [lineaProdId, setLineaProdId] = useState("");
-  const [lineaCant,   setLineaCant]   = useState("");
-  const [lineaPrecio, setLineaPrecio] = useState("");
-  const [lineaIva,    setLineaIva]    = useState<TipoIvaVenta>("10%");
-  const [lineaTipoPrecio, setLineaTipoPrecio] = useState<TipoPrecioVenta>("minorista");
-
-  // ── Combobox de producto ───────────────────────────────────────────────────
+  // ── Combobox de producto (autocomplete server-side) ─────────────────────────
   const [comboQuery,     setComboQuery]     = useState("");
   const [comboOpen,      setComboOpen]      = useState(false);
   const [comboHighlight, setComboHighlight] = useState(-1);
+  const [comboHits,      setComboHits]      = useState<Producto[]>([]);
+  const [comboBuscando,  setComboBuscando]  = useState(false);
+  const comboTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const comboInputRef    = useRef<HTMLInputElement>(null);
   const comboContainerRef = useRef<HTMLDivElement>(null);
 
@@ -216,13 +226,6 @@ export default function NuevaVentaPage() {
       imagen_path: null,
       imagen_url: p.imagen_url,
     };
-  }
-
-  function handleSelectFromPicker(p: ProductoPickerItem) {
-    const prod = pickerToProducto(p);
-    setProductos((prev) => (prev.find((x) => x.id === prod.id) ? prev : [...prev, prod]));
-    seleccionarProducto(prod);
-    setPickerOpen(false);
   }
 
   /**
@@ -391,19 +394,79 @@ export default function NuevaVentaPage() {
     return () => { cancelled = true; window.removeEventListener("focus", onFocus); };
   }, []);
 
-  // UX rápida: abrir el buscador de productos al entrar (carrito vacío).
-  // Si el usuario lo cierra, sigue usando el formulario normal (no queda atrapado).
-  // EXCEPCIÓN: al facturar un pedido (?pedido_id=...) NO se auto-abre, porque el
-  // carrito viene precargado; el usuario usa el botón "+ Agregar producto" si quiere más.
-  // Se lee la URL directamente (no el estado pedidoId) para evitar la carrera de montaje.
+  // UX rápida: al entrar, enfocar el buscador inline para empezar a cargar de
+  // una (sin abrir modales). El "Buscador avanzado" (picker) queda a un clic.
   useEffect(() => {
-    let tienePedido = false;
-    try {
-      tienePedido = !!new URLSearchParams(window.location.search).get("pedido_id");
-    } catch { tienePedido = false; }
-    if (!tienePedido) setPickerOpen(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const t = setTimeout(() => comboInputRef.current?.focus(), 120);
+    return () => clearTimeout(t);
   }, []);
+
+  // Autocomplete: búsqueda server-side por tokens (todo el catálogo), con debounce.
+  useEffect(() => {
+    const q = comboQuery.trim();
+    if (comboTimerRef.current) clearTimeout(comboTimerRef.current);
+    if (q.length < 2) { setComboHits([]); setComboBuscando(false); return; }
+    setComboBuscando(true);
+    comboTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetchWithSupabaseSession(
+          `/api/productos/search?q=${encodeURIComponent(q)}&limit=20`,
+          { cache: "no-store" }
+        );
+        const j = await res.json();
+        const items = ((j?.data?.items ?? []) as Record<string, unknown>[]).map((p): Producto => ({
+          id: String(p.id),
+          nombre: String(p.nombre ?? ""),
+          sku: String(p.sku ?? ""),
+          costo_promedio: Number(p.costo_promedio) || 0,
+          precio_venta: Number(p.precio_venta) || 0,
+          precio_mayorista: p.precio_mayorista != null ? Number(p.precio_mayorista) : null,
+          precio_distribuidor: p.precio_distribuidor != null ? Number(p.precio_distribuidor) : null,
+          stock_actual: Number(p.stock_actual) || 0,
+          stock_minimo: Number(p.stock_minimo) || 0,
+          unidad_medida: String(p.unidad_medida ?? "UNIDAD"),
+          metodo_valuacion: (typeof p.metodo_valuacion === "string" ? p.metodo_valuacion : "CPP") as MetodoValuacion,
+          es_vendible: p.es_vendible !== false,
+          controla_stock: p.controla_stock !== false,
+          tipo_iva: (p.tipo_iva === "EXENTA" || p.tipo_iva === "5%" ? p.tipo_iva : "10%") as TipoIvaVenta,
+          imagen_url: (p.imagen_url as string | null) ?? null,
+          imagen_path: (p.imagen_path as string | null) ?? null,
+        }));
+        setComboHits(items);
+        // Merge a `productos` para que los lookups (tipo de precio, stock) resuelvan.
+        if (items.length > 0) {
+          setProductos((prev) => {
+            const byId = new Map(prev.map((x) => [x.id, x]));
+            for (const it of items) byId.set(it.id, { ...byId.get(it.id), ...it });
+            return [...byId.values()];
+          });
+        }
+      } catch {
+        setComboHits([]);
+      } finally {
+        setComboBuscando(false);
+      }
+    }, 220);
+    return () => { if (comboTimerRef.current) clearTimeout(comboTimerRef.current); };
+  }, [comboQuery]);
+
+  // Cerrar el dropdown del buscador al hacer clic fuera.
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (comboContainerRef.current && !comboContainerRef.current.contains(e.target as Node)) {
+        setComboOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Scroll a la opción destacada en el dropdown.
+  useEffect(() => {
+    if (comboHighlight >= 0) {
+      document.getElementById(`combo-opt-${comboHighlight}`)?.scrollIntoView({ block: "nearest" });
+    }
+  }, [comboHighlight]);
 
   // Cerrar dropdown al hacer clic fuera
   useEffect(() => {
@@ -428,30 +491,6 @@ export default function NuevaVentaPage() {
 
   // ── Cálculos ───────────────────────────────────────────────────────────────
   const tipoCambioNum = 1;
-
-  const prodSel     = productos.find((p) => p.id === lineaProdId);
-  const cantNum     = parseInt(lineaCant) || 0;
-  const precioInput = parseFloat(lineaPrecio) || 0;
-  const precioGs    = precioInput;
-
-  const enCarrito = items
-    .filter((i) => i.producto_id === lineaProdId)
-    .reduce((s, i) => s + i.cantidad, 0);
-  const prodSelControlaStock = prodSel ? prodSel.controla_stock !== false : true;
-  const stockDisp = (prodSel?.stock_actual ?? 0) - enCarrito;
-
-  // IVA incluido: el total de la línea es precio × cantidad; el IVA se desglosa
-  // desde adentro y el subtotal (base imponible) = total − IVA.
-  const lineaTotalLinea = cantNum > 0 && precioGs > 0 ? cantNum * precioGs : 0;
-  const lineaMontoIva   = calcIva(lineaIva, lineaTotalLinea);
-  const lineaSubtotal   = lineaTotalLinea - lineaMontoIva;
-
-  // Aviso de stock (no bloquea): si falta stock se permite agregar igual y se pide
-  // confirmación al confirmar la venta (venta sin stock con confirmación, Fase 5).
-  // Productos del Menú (controla_stock=false) no controlan stock.
-  const stockInsuf  = prodSel !== undefined && prodSelControlaStock && cantNum > 0 && cantNum > stockDisp;
-  const lineaValida =
-    !!prodSel && cantNum > 0 && precioGs > 0;
 
   const totalSubtotal = items.reduce((s, i) => s + i.subtotal, 0);
   const totalIva      = items.reduce((s, i) => s + i.monto_iva, 0);
@@ -484,26 +523,10 @@ export default function NuevaVentaPage() {
   const montoRecibidoNum = parseFloat(montoRecibido) || 0;
   const vuelto           = montoRecibidoNum - totalGeneral;
 
-  // ── Productos filtrados para el combobox ──────────────────────────────────
-  // Solo vendibles (Reventa + Menú). Excluye materia prima / insumos.
-  const productosVendibles = productos.filter((p) => p.es_vendible !== false);
-  const comboFiltrados = comboQuery.trim() === ""
-    ? productosVendibles
-    : productosVendibles.filter((p) => productoMatchesQuery(comboQuery, p.nombre, p.sku));
-
-  // ── Selección de un producto desde el combobox ────────────────────────────
-  function seleccionarProducto(p: Producto) {
-    setLineaProdId(String(p.id));
-    setLineaTipoPrecio("minorista");
-    setLineaPrecio(String(precioPorTipo(p, "minorista")));
-    setLineaCant("1");
-    // IVA real del producto (no forzar 10%: hay productos 5%/exenta).
-    setLineaIva(p.tipo_iva ?? "10%");
-    setComboQuery(`${p.nombre} — ${p.sku}`);
-    setComboOpen(false);
-    setComboHighlight(-1);
-    setErrorLinea(null);
-  }
+  // ── Resultados del autocomplete de producto ────────────────────────────────
+  // Vienen del endpoint de búsqueda server-side (token search sobre TODO el
+  // catálogo, no un subconjunto en memoria).
+  const comboResultados = comboHits;
 
   /** Selecciona método de cobro. Efectivo no pide datos; transferencia/tarjeta abren modal. */
   function handleSelectMetodo(m: MetodoPago) {
@@ -520,113 +543,86 @@ export default function NuevaVentaPage() {
     }
   }
 
-  /** Cambia el tipo de precio de la línea en construcción y ajusta el precio unitario. */
-  function handleLineaTipoPrecio(tipo: TipoPrecioVenta) {
-    setLineaTipoPrecio(tipo);
-    if (prodSel) setLineaPrecio(String(precioPorTipo(prodSel, tipo)));
-    setErrorLinea(null);
+  function handleEliminarLinea(index: number) {
+    setItems((prev) => prev.filter((_, i) => i !== index));
   }
 
-  // ── Handlers del combobox ─────────────────────────────────────────────────
-  function handleComboInput(e: React.ChangeEvent<HTMLInputElement>) {
-    setComboQuery(e.target.value);
-    setComboOpen(true);
+  // ── Autocomplete rápido + edición inline de la tabla ───────────────────────
+  /** Recalcula subtotal/IVA/total de una línea (IVA incluido, igual que calcIva). */
+  function recomputeLinea(l: LineaVenta): LineaVenta {
+    const total_linea = l.cantidad > 0 && l.precio_venta > 0 ? l.cantidad * l.precio_venta : 0;
+    const monto_iva = calcIva(l.tipo_iva, total_linea);
+    return { ...l, total_linea, monto_iva, subtotal: total_linea - monto_iva };
+  }
+
+  /** Agrega un producto directo desde el autocomplete: si ya está suma +1; si no,
+   *  crea la línea. Luego limpia el input y devuelve el foco (carga rápida tipo caja). */
+  function agregarProductoRapido(p: Producto) {
+    const precio = precioPorTipo(p, "minorista");
+    setProductos((prev) => (prev.find((x) => x.id === p.id) ? prev : [...prev, p]));
+    setItems((prev) => {
+      const idx = prev.findIndex((it) => it.producto_id === p.id);
+      if (idx >= 0) {
+        return prev.map((it, i) => (i === idx ? recomputeLinea({ ...it, cantidad: it.cantidad + 1 }) : it));
+      }
+      return [
+        ...prev,
+        recomputeLinea({
+          producto_id: p.id,
+          producto_nombre: p.nombre,
+          sku: p.sku,
+          cantidad: 1,
+          precio_venta_original: precio,
+          precio_venta: precio,
+          tipo_iva: p.tipo_iva ?? "10%",
+          tipo_precio: "minorista",
+          subtotal: 0,
+          monto_iva: 0,
+          total_linea: 0,
+        }),
+      ];
+    });
+    setComboQuery("");
+    setComboOpen(false);
     setComboHighlight(-1);
-    // Si el usuario borra el texto, limpiar la selección
-    if (e.target.value === "") {
-      setLineaProdId("");
-      setLineaPrecio("");
-      setLineaCant("");
-    }
     setErrorLinea(null);
+    setTimeout(() => comboInputRef.current?.focus(), 0);
   }
 
-  function handleComboKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+  function updateItemCampo(idx: number, patch: Partial<LineaVenta>) {
+    setItems((prev) => prev.map((it, i) => (i === idx ? recomputeLinea({ ...it, ...patch }) : it)));
+  }
+  function changeCantidadItem(idx: number, delta: number) {
+    setItems((prev) => prev.map((it, i) => (i === idx ? recomputeLinea({ ...it, cantidad: Math.max(1, it.cantidad + delta) }) : it)));
+  }
+  function changeTipoPrecioItem(idx: number, tipo: TipoPrecioVenta) {
+    setItems((prev) =>
+      prev.map((it, i) => {
+        if (i !== idx) return it;
+        const prod = productos.find((p) => p.id === it.producto_id);
+        const precio = prod ? precioPorTipo(prod, tipo) : it.precio_venta;
+        return recomputeLinea({ ...it, tipo_precio: tipo, precio_venta: precio, precio_venta_original: precio });
+      })
+    );
+  }
+
+  /** Teclado del autocomplete: ↑/↓ navega, Enter agrega el resaltado (o el primero), Esc cierra. */
+  function onComboKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setComboOpen(true);
-      setComboHighlight((h) => Math.min(h + 1, comboFiltrados.length - 1));
+      setComboHighlight((h) => Math.min(h + 1, comboResultados.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setComboHighlight((h) => Math.max(h - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (comboOpen && comboHighlight >= 0 && comboFiltrados[comboHighlight]) {
-        // Seleccionar el ítem destacado del dropdown
-        seleccionarProducto(comboFiltrados[comboHighlight]);
-      } else if (!comboOpen && lineaValida) {
-        // Dropdown cerrado + producto válido → agregar al carrito
-        handleAgregarLinea();
-      }
+      const sel = comboResultados[comboHighlight] ?? comboResultados[0];
+      if (sel) agregarProductoRapido(sel);
     } else if (e.key === "Escape") {
       setComboOpen(false);
       setComboHighlight(-1);
     }
-  }
-
-  // ── Agregar línea al carrito ──────────────────────────────────────────────
-  function handleAgregarLinea() {
-    setErrorLinea(null);
-    if (!prodSel)          return setErrorLinea("Seleccioná un producto.");
-    if (cantNum <= 0)      return setErrorLinea("La cantidad debe ser mayor a 0.");
-    if (precioGs <= 0)     return setErrorLinea("El precio de venta debe ser mayor a 0.");
-    // Nota: si falta stock NO se bloquea; se confirma al registrar la venta.
-
-    setItems((prev) => [
-      ...prev,
-      {
-        producto_id:           prodSel.id,
-        producto_nombre:       prodSel.nombre,
-        sku:                   prodSel.sku,
-        cantidad:              cantNum,
-        precio_venta_original: precioInput,
-        precio_venta:          precioGs,
-        tipo_iva:              lineaIva,
-        tipo_precio:           lineaTipoPrecio,
-        subtotal:              lineaSubtotal,
-        monto_iva:             lineaMontoIva,
-        total_linea:           lineaTotalLinea,
-      },
-    ]);
-
-    // Limpiar línea y devolver foco al buscador de producto
-    setLineaProdId("");
-    setLineaCant("");
-    setLineaPrecio("");
-    setLineaIva("10%");
-    setLineaTipoPrecio("minorista");
-    setComboQuery("");
-    setComboOpen(false);
-    setTimeout(() => comboInputRef.current?.focus(), 0);
-  }
-
-  /**
-   * Cambia la cantidad de una línea ya cargada al carrito. Recalcula subtotal /
-   * monto_iva / total_linea manteniendo IVA incluido. Rechaza silenciosamente
-   * cantidades inválidas (0, negativas, NaN) — el input las mantiene visualmente
-   * pero no dispara update hasta que el usuario tipee algo válido.
-   */
-  function handleCambiarCantidad(index: number, nuevaCantidad: number) {
-    if (!Number.isFinite(nuevaCantidad) || nuevaCantidad <= 0) return;
-    setItems((prev) =>
-      prev.map((it, i) => {
-        if (i !== index) return it;
-        const totalLinea = nuevaCantidad * it.precio_venta;
-        const montoIva = calcIva(it.tipo_iva, totalLinea);
-        const subtotal = totalLinea - montoIva;
-        return {
-          ...it,
-          cantidad: nuevaCantidad,
-          subtotal,
-          monto_iva: montoIva,
-          total_linea: totalLinea,
-        };
-      })
-    );
-  }
-
-  function handleEliminarLinea(index: number) {
-    setItems((prev) => prev.filter((_, i) => i !== index));
   }
 
   /** Envía la venta. Con `permitirSinStock=true` autoriza vender aunque falte stock. */
@@ -741,20 +737,11 @@ export default function NuevaVentaPage() {
   return (
     <div className="space-y-8">
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-800">Nueva venta</h1>
-          <p className="text-gray-600">
-            Agregá productos de reventa o del catálogo. Al confirmar se registra la venta.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setPickerOpen(true)}
-          className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-[#0EA5E9] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#0284C7] active:scale-95"
-        >
-          + Agregar producto
-        </button>
+      <div>
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-800">Nueva venta</h1>
+        <p className="text-gray-600">
+          Buscá un producto y se agrega al instante. Revisá cantidades y precios en la tabla.
+        </p>
       </div>
 
       {pedidoId && (
@@ -831,13 +818,11 @@ export default function NuevaVentaPage() {
                 </div>
               )}
               <p className="mt-1 text-[11px] text-gray-400">
-                Toda venta emite factura ERP. Si el cliente no existe, cargalo con “＋ Cargar nuevo cliente”.
+                El cliente es opcional para el ticket. Si no existe, cargalo con “＋ Cargar nuevo cliente”.
               </p>
               {!clienteId && clienteObligatorio && (
                 <p className="mt-1 text-[11px] text-rose-600">
-                  {tipoDocumento === "factura"
-                    ? "Seleccioná un cliente para poder emitir la factura electrónica."
-                    : "La venta a crédito requiere un cliente seleccionado."}
+                  La venta a crédito requiere un cliente seleccionado.
                 </p>
               )}
 
@@ -895,26 +880,17 @@ export default function NuevaVentaPage() {
               )}
             </div>
 
-            {/* Documento a emitir: Ticket (solo comanda, sin SIFEN) vs Factura (puente a SIFEN) */}
+            {/* Documento a emitir — SIFEN no configurado en esta instancia: la venta
+                sale siempre como ticket. El selector Factura/Ticket se oculta hasta
+                activar la facturación electrónica (ver comentario en tipoDocumento). */}
             <div>
               <label className={labelClass}>Documento</label>
-              <SegmentedControl<"ticket" | "factura">
-                value={tipoDocumento}
-                options={[
-                  { value: "factura", label: "Factura electrónica" },
-                  { value: "ticket", label: "Solo ticket" },
-                ]}
-                onChange={(v) => setTipoDocumento(v)}
-              />
-              {tipoDocumento === "factura" ? (
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Al confirmar, se emite la factura FAC-XXXXXX y arranca el pipeline SIFEN (firma + envío + KUDE).
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <p className="text-sm font-medium text-slate-700">Ticket de venta</p>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  Se registra la venta y se imprime un ticket. La facturación electrónica todavía no está habilitada para esta empresa.
                 </p>
-              ) : (
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Solo se registra la venta e imprime un ticket comanda. No genera factura ni toca SIFEN. Podés emitir la factura después desde la venta si el cliente la pide.
-                </p>
-              )}
+              </div>
             </div>
 
           </div>
@@ -922,98 +898,196 @@ export default function NuevaVentaPage() {
 
         {/* ── SECCIÓN 3: Carrito + totales + confirmar ─────────────────────── */}
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 sm:p-6">
-          <SectionTitle>Productos en esta venta</SectionTitle>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <SectionTitle>Productos en esta venta</SectionTitle>
+            <button
+              type="button"
+              onClick={() => setPickerOpen(true)}
+              className="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-[#4FAEB2] hover:text-[#3F8E91]"
+              title="Buscador avanzado (más filtros, crear producto)"
+            >
+              Buscador avanzado
+            </button>
+          </div>
+
+          {/* Autocomplete: al elegir un producto se agrega solo y se limpia. */}
+          <div ref={comboContainerRef} className="relative">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#4FAEB2]" />
+            <input
+              ref={comboInputRef}
+              type="text"
+              value={comboQuery}
+              onChange={(e) => { setComboQuery(e.target.value); setComboOpen(true); setComboHighlight(-1); }}
+              onFocus={() => setComboOpen(true)}
+              onKeyDown={onComboKeyDown}
+              placeholder="Buscar producto por nombre, SKU o palabras clave…"
+              className="h-12 w-full rounded-xl border-2 border-[#4FAEB2]/30 bg-white pl-12 pr-4 text-base text-slate-800 outline-none transition-all focus:border-[#4FAEB2] focus:ring-4 focus:ring-[#4FAEB2]/15"
+              autoComplete="off"
+            />
+            {comboOpen && comboQuery.trim().length >= 2 && (
+              <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-[56vh] overflow-y-auto rounded-xl border-2 border-[#4FAEB2]/20 bg-white shadow-[0_16px_40px_-12px_rgba(15,23,42,0.28)]">
+                {comboBuscando && comboResultados.length === 0 ? (
+                  <div className="px-4 py-5 text-center text-sm text-slate-400">Buscando…</div>
+                ) : comboResultados.length === 0 ? (
+                  <div className="px-4 py-5 text-center text-sm text-slate-400">Sin resultados para &quot;{comboQuery}&quot;.</div>
+                ) : (
+                  <ul className="divide-y divide-slate-100">
+                    {comboResultados.map((p, i) => {
+                      const controla = p.controla_stock !== false;
+                      const sinStock = controla && (p.stock_actual ?? 0) <= 0;
+                      return (
+                        <li key={p.id}>
+                          <button
+                            type="button"
+                            id={`combo-opt-${i}`}
+                            onMouseEnter={() => setComboHighlight(i)}
+                            onClick={() => agregarProductoRapido(p)}
+                            className={`flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors ${i === comboHighlight ? "bg-[#4FAEB2]/10" : "hover:bg-slate-50"}`}
+                          >
+                            <ProductoThumb url={p.imagen_url} alt={p.nombre} />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-semibold text-slate-800">{p.nombre}</p>
+                              <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
+                                <span className="font-mono">{p.sku}</span>
+                                <span className="text-slate-300">·</span>
+                                <span className={`font-semibold ${!controla ? "text-slate-400" : sinStock ? "text-red-600" : (p.stock_actual ?? 0) < 5 ? "text-amber-600" : "text-emerald-700"}`}>
+                                  {!controla ? "Sin control" : sinStock ? "Sin stock" : `${p.stock_actual} ${p.unidad_medida ?? ""}`}
+                                </span>
+                              </div>
+                            </div>
+                            <span className="shrink-0 text-sm font-bold tabular-nums text-slate-800">{formatGs(precioPorTipo(p, "minorista"))}</span>
+                            <span className="shrink-0 inline-flex items-center gap-1 rounded-lg bg-[#4FAEB2]/12 px-2.5 py-1 text-xs font-bold text-[#3F8E91]">
+                              <Plus className="h-3.5 w-3.5" strokeWidth={2.5} /> Agregar
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                    {comboResultados.length >= 20 && (
+                      <li className="px-4 py-2 text-center text-[11px] text-slate-400">
+                        Mostrando los primeros 20. Refiná la búsqueda para acotar.
+                      </li>
+                    )}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
 
           {items.length === 0 ? (
-            <div className="py-10 text-center text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-lg">
-              Todavía no agregaste productos a esta venta.
+            <div className="mt-4 py-10 text-center text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-lg">
+              Buscá un producto arriba y se agrega automáticamente a la venta.
             </div>
           ) : (
             <>
-              {/* min-w fuerza scroll horizontal en mobile (9 columnas).
-                  Columnas secundarias (SKU, Subtotal, IVA Gs) se ocultan
-                  progresivamente: en mobile solo Producto/Cant/Precio/Total/eliminar. */}
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] sm:min-w-0 text-sm text-left">
+              {/* Tabla editable: cantidad (± / campo), nivel de precio, IVA y precio
+                  unitario son editables por fila. min-w fuerza scroll en mobile. */}
+              <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full min-w-[900px] text-sm text-left">
                   <thead>
-                    <tr className="bg-slate-50 text-slate-600 text-sm font-semibold">
-                      <th className="py-2.5 pr-3 font-medium">Producto</th>
-                      <th className="hidden py-2.5 pr-3 font-medium lg:table-cell">SKU</th>
-                      <th className="py-2.5 pr-3 font-medium text-right">Cant.</th>
-                      <th className="py-2.5 pr-3 font-medium text-right">Precio unit.</th>
-                      <th className="hidden py-2.5 pr-3 text-center font-medium lg:table-cell">IVA</th>
-                      <th className="py-2.5 pr-3 font-medium text-right hidden lg:table-cell">Subtotal</th>
-                      <th className="py-2.5 pr-3 font-medium text-right hidden lg:table-cell">IVA Gs.</th>
-                      <th className="py-2.5 pr-3 font-medium text-right">Total</th>
-                      <th className="py-2.5 font-medium"></th>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                      <th className="px-3 py-3">Producto</th>
+                      <th className="hidden px-3 py-3 md:table-cell">Precio</th>
+                      <th className="hidden px-3 py-3 text-center md:table-cell">IVA</th>
+                      <th className="px-3 py-3 text-center">Cant.</th>
+                      <th className="px-3 py-3 text-right">Precio unit.</th>
+                      <th className="px-3 py-3 text-right">Stock</th>
+                      <th className="px-3 py-3 text-right">Subtotal</th>
+                      <th className="w-10 px-2 py-3"></th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {items.map((item, idx) => (
-                      <tr key={idx} className="border-b border-slate-200 last:border-0 hover:bg-slate-50 transition-colors">
-                        <td className="py-3 pr-3 font-medium text-gray-800">
-                          <span>{item.producto_nombre}</span>
-                          <span className={`ml-2 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold align-middle ${
-                            item.tipo_precio === "mayorista" ? "bg-indigo-100 text-indigo-700"
-                            : item.tipo_precio === "distribuidor" ? "bg-emerald-100 text-emerald-700"
-                            : item.tipo_precio === "costo" ? "bg-amber-100 text-amber-700"
-                            : "bg-slate-100 text-slate-600"
-                          }`}>
-                            {tipoPrecioLabel[item.tipo_precio ?? "minorista"]}
-                          </span>
-                        </td>
-                        <td className="hidden py-3 pr-3 font-mono text-xs text-gray-500 lg:table-cell">
-                          {item.sku}
-                        </td>
-                        <td className="py-3 pr-3 text-right tabular-nums">
-                          <input
-                            type="number"
-                            min="0.01"
-                            step="any"
-                            inputMode="decimal"
-                            value={item.cantidad}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(",", ".");
-                              const n = Number(raw);
-                              if (Number.isFinite(n) && n > 0) {
-                                handleCambiarCantidad(idx, n);
-                              }
-                            }}
-                            className="w-16 rounded border border-slate-200 bg-white px-2 py-1 text-right text-sm tabular-nums text-slate-800 focus:border-[#4FAEB2] focus:outline-none focus:ring-1 focus:ring-[#4FAEB2]"
-                            aria-label={`Cantidad de ${item.producto_nombre}`}
-                          />
-                        </td>
-                        <td className="py-3 pr-3 text-right tabular-nums text-gray-600 text-xs">
-                          {formatGs(item.precio_venta)}
-                        </td>
-                        <td className="hidden py-3 pr-3 text-center lg:table-cell">
-                          <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
-                            {ivaLabel[item.tipo_iva]}
-                          </span>
-                        </td>
-                        <td className="py-3 pr-3 text-right tabular-nums text-gray-600 text-xs hidden lg:table-cell">
-                          {formatGs(item.subtotal)}
-                        </td>
-                        <td className="py-3 pr-3 text-right tabular-nums text-gray-500 text-xs hidden lg:table-cell">
-                          {item.monto_iva > 0 ? formatGs(item.monto_iva) : "—"}
-                        </td>
-                        <td className="py-3 pr-3 text-right tabular-nums font-semibold text-gray-800">
-                          {formatGs(item.total_linea)}
-                        </td>
-                        <td className="py-3 text-center">
-                          <button
-                            type="button"
-                            onClick={() => handleEliminarLinea(idx)}
-                            className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] text-red-400 hover:text-red-700 transition-colors rounded hover:bg-red-50"
-                            title="Eliminar producto"
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-                              <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clipRule="evenodd" />
-                            </svg>
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                  <tbody className="divide-y divide-slate-100">
+                    {items.map((item, idx) => {
+                      const prod = productos.find((p) => p.id === item.producto_id);
+                      const controla = prod ? prod.controla_stock !== false : true;
+                      const stock = prod?.stock_actual ?? 0;
+                      const stockBajo = controla && item.cantidad > stock;
+                      return (
+                        <tr key={idx} className="align-middle transition-colors hover:bg-[#4FAEB2]/5">
+                          {/* Producto + SKU */}
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center gap-3">
+                              <ProductoThumb url={prod?.imagen_url} alt={item.producto_nombre} />
+                              <div className="min-w-0">
+                                <p className="font-semibold text-slate-900 leading-snug">{item.producto_nombre}</p>
+                                <p className="font-mono text-[11px] text-slate-500">{item.sku}</p>
+                              </div>
+                            </div>
+                          </td>
+                          {/* Nivel de precio */}
+                          <td className="hidden px-3 py-2.5 md:table-cell">
+                            <div className="inline-flex overflow-hidden rounded-lg border border-slate-200">
+                              {(["minorista", "mayorista", "distribuidor"] as const).map((tp) => {
+                                const sel = (item.tipo_precio ?? "minorista") === tp;
+                                return (
+                                  <button key={tp} type="button" onClick={() => changeTipoPrecioItem(idx, tp)}
+                                    className={`px-2 py-1.5 text-[11px] font-semibold transition-colors ${sel ? "bg-[#4FAEB2] text-white" : "bg-white text-slate-600 hover:bg-slate-100"}`}>
+                                    {tp === "minorista" ? "Min" : tp === "mayorista" ? "May" : "Dist"}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </td>
+                          {/* IVA */}
+                          <td className="hidden px-3 py-2.5 md:table-cell">
+                            <div className="inline-flex overflow-hidden rounded-lg border border-slate-200">
+                              {(["EXENTA", "5%", "10%"] as const).map((iva) => {
+                                const sel = item.tipo_iva === iva;
+                                return (
+                                  <button key={iva} type="button" onClick={() => updateItemCampo(idx, { tipo_iva: iva })}
+                                    className={`px-2 py-1.5 text-[11px] font-semibold transition-colors ${sel ? "bg-[#4FAEB2] text-white" : "bg-white text-slate-600 hover:bg-slate-100"}`}>
+                                    {iva === "EXENTA" ? "Ex" : iva}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </td>
+                          {/* Cantidad con steppers */}
+                          <td className="px-3 py-2.5">
+                            <div className="mx-auto flex w-fit items-center rounded-md border border-slate-200 bg-white">
+                              <button type="button" onClick={() => changeCantidadItem(idx, -1)} className="h-8 w-8 rounded-l-md text-slate-500 hover:bg-slate-100"><Minus className="mx-auto h-3.5 w-3.5" /></button>
+                              <input
+                                type="number" min={1} value={item.cantidad}
+                                onChange={(e) => updateItemCampo(idx, { cantidad: Math.max(1, parseInt(e.target.value) || 1) })}
+                                className="h-8 w-12 text-center text-sm tabular-nums outline-none"
+                                aria-label={`Cantidad de ${item.producto_nombre}`}
+                              />
+                              <button type="button" onClick={() => changeCantidadItem(idx, 1)} className="h-8 w-8 rounded-r-md text-slate-500 hover:bg-slate-100"><Plus className="mx-auto h-3.5 w-3.5" /></button>
+                            </div>
+                          </td>
+                          {/* Precio unitario editable */}
+                          <td className="px-3 py-2.5 text-right">
+                            <input
+                              type="number" min={0} value={item.precio_venta}
+                              onChange={(e) => updateItemCampo(idx, { precio_venta: Math.max(0, Number(e.target.value) || 0) })}
+                              className="h-8 w-28 rounded-md border border-slate-200 bg-white px-2 text-right text-sm tabular-nums"
+                              aria-label={`Precio unitario de ${item.producto_nombre}`}
+                            />
+                          </td>
+                          {/* Stock */}
+                          <td className="px-3 py-2.5 text-right">
+                            <span className={`text-xs font-semibold tabular-nums ${!controla ? "text-slate-400" : stockBajo ? "text-red-600" : "text-slate-600"}`}>
+                              {!controla ? "—" : stock}
+                            </span>
+                          </td>
+                          {/* Total de línea */}
+                          <td className="px-3 py-2.5 text-right">
+                            <span className="text-sm font-bold tabular-nums text-slate-900">{formatGs(item.total_linea)}</span>
+                          </td>
+                          {/* Quitar */}
+                          <td className="px-2 py-2.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleEliminarLinea(idx)}
+                              className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                              title="Quitar producto"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1149,7 +1223,7 @@ export default function NuevaVentaPage() {
         excludeIds={items.map((i) => i.producto_id)}
         moneda={moneda}
         tipoCambio={tipoCambioNum}
-        ivaDefault={lineaIva}
+        ivaDefault="10%"
         tipoPrecioDefault={clienteSel?.nivel_precio ?? "minorista"}
       />
 

@@ -1,8 +1,29 @@
 "use client";
 
 import { memo, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
+import {
+  Package,
+  Boxes,
+  AlertTriangle,
+  Gem,
+  CalendarDays,
+  CalendarRange,
+  Ticket,
+  ShoppingBag,
+  Wallet,
+  Percent,
+  Coins,
+  BadgeDollarSign,
+  ClipboardList,
+  Clock,
+  Trophy,
+  ArrowUpRight,
+  ArrowDownRight,
+  type LucideIcon,
+} from "lucide-react";
 // MobileDashboard se renderiza solo en mobile (md:hidden). El dashboard desktop
 // que vive en este mismo archivo queda intacto.
 import MobileDashboard from "@/app/_components/MobileDashboard";
@@ -575,6 +596,112 @@ function KpiCard({
       <p className="mt-1 text-xs font-medium text-[#475569]">{label}</p>
       {sub && <p className="mt-1 text-xs text-[#475569]">{sub}</p>}
     </motion.div>
+  );
+}
+
+// ── KPI Tile (turquesa) + Section Card ─────────────────────────────────────────
+//
+// Estética unificada para los tableros: fondo blanco, acento turquesa de marca,
+// ícono en un chip suave. Los estados (rojo/ámbar/verde) NO son decoración — son
+// semántica (crítico/alerta/ok) — así que se mantienen aunque el acento sea uno.
+
+type Tono = "accent" | "danger" | "warn" | "success" | "slate";
+
+const TONO_TILE: Record<Tono, { chip: string; value: string; bar: string }> = {
+  accent:  { chip: "bg-[#4FAEB2]/12 text-[#3F8E91]", value: "text-slate-900", bar: "bg-[#4FAEB2]" },
+  danger:  { chip: "bg-red-50 text-red-600",         value: "text-red-600",   bar: "bg-red-500" },
+  warn:    { chip: "bg-amber-50 text-amber-600",     value: "text-amber-600", bar: "bg-amber-400" },
+  success: { chip: "bg-emerald-50 text-emerald-600", value: "text-emerald-600", bar: "bg-emerald-500" },
+  slate:   { chip: "bg-slate-100 text-slate-500",    value: "text-slate-900", bar: "bg-slate-300" },
+};
+
+function KpiTile({
+  icon: Icon,
+  label,
+  value,
+  sub,
+  tono = "accent",
+  variation,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  sub?: string;
+  tono?: Tono;
+  variation?: number;
+}) {
+  const t = TONO_TILE[tono];
+  return (
+    <motion.div
+      whileHover={{ y: -3 }}
+      transition={{ type: "spring", stiffness: 400, damping: 28 }}
+      className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ring-1 ring-[#4FAEB2]/5 transition-shadow duration-200 hover:shadow-md"
+    >
+      {/* Barra de acento que crece en hover — vida sin ruido. */}
+      <span
+        className={`pointer-events-none absolute inset-x-0 top-0 h-0.5 origin-left scale-x-0 transition-transform duration-300 ease-out group-hover:scale-x-100 ${t.bar}`}
+      />
+      <div className="flex items-start justify-between gap-2">
+        <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${t.chip}`}>
+          <Icon className="h-5 w-5" />
+        </span>
+        {variation !== undefined && (
+          <span
+            className={`inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-semibold ${
+              variation >= 0 ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+            }`}
+          >
+            {variation >= 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+            {Math.abs(variation)}%
+          </span>
+        )}
+      </div>
+      <p className={`mt-4 text-2xl font-bold leading-tight tracking-tight tabular-nums xl:text-[1.7rem] ${t.value}`}>
+        {value}
+      </p>
+      <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+      {sub && <p className="mt-0.5 text-xs text-slate-500">{sub}</p>}
+    </motion.div>
+  );
+}
+
+function SectionCard({
+  icon: Icon,
+  title,
+  subtitle,
+  right,
+  children,
+  className = "",
+}: {
+  icon?: LucideIcon;
+  title: string;
+  subtitle?: string;
+  right?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <motion.section
+      whileHover={{ y: -2 }}
+      transition={{ type: "spring", stiffness: 400, damping: 30 }}
+      className={`min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ring-1 ring-[#4FAEB2]/5 transition-shadow duration-200 hover:shadow-md sm:p-6 ${className}`}
+    >
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          {Icon && (
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#4FAEB2]/12 text-[#3F8E91]">
+              <Icon className="h-4 w-4" />
+            </span>
+          )}
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-bold tracking-tight text-slate-900">{title}</h3>
+            {subtitle && <p className="mt-0.5 text-[11px] text-slate-400">{subtitle}</p>}
+          </div>
+        </div>
+        {right && <div className="shrink-0 text-right">{right}</div>}
+      </div>
+      {children}
+    </motion.section>
   );
 }
 
@@ -1204,7 +1331,7 @@ const DashFinanciero = memo(function DashFinanciero({
       const key = raw || "__sin__";
       map.set(key, (map.get(key) ?? 0) + 1);
     }
-    const PALETTE = ["#2563EB", "#3B82F6", "#60A5FA", "#22C55E", "#A78BFA", "#F59E0B", "#EC4899", "#38BDF8"];
+    const PALETTE = ["#4FAEB2", "#3F8E91", "#22C55E", "#38BDF8", "#A78BFA", "#F59E0B", "#EC4899", "#0EA5E9"];
     const entries = [...map.entries()].sort((a, b) => b[1] - a[1]);
     return {
       dimCliente: dim,
@@ -1239,7 +1366,7 @@ const DashFinanciero = memo(function DashFinanciero({
       const slug = byCliente.get(String(f.cliente_id)) ?? "__sin__";
       m.set(slug, (m.get(slug) ?? 0) + s);
     }
-    const pal = ["#2563EB", "#3B82F6", "#60A5FA", "#22C55E", "#A78BFA", "#F59E0B", "#EC4899", "#38BDF8"];
+    const pal = ["#4FAEB2", "#3F8E91", "#22C55E", "#38BDF8", "#A78BFA", "#F59E0B", "#EC4899", "#0EA5E9"];
     const list = [...m.entries()]
       .map(([k, v]) => ({
         key: k,
@@ -1278,7 +1405,7 @@ const DashFinanciero = memo(function DashFinanciero({
       const slug = byCliente.get(String(factura.cliente_id)) ?? "__sin__";
       m.set(slug, (m.get(slug) ?? 0) + pagoMonto);
     }
-    const pal = ["#2563EB", "#3B82F6", "#60A5FA", "#22C55E", "#A78BFA", "#F59E0B", "#EC4899", "#38BDF8"];
+    const pal = ["#4FAEB2", "#3F8E91", "#22C55E", "#38BDF8", "#A78BFA", "#F59E0B", "#EC4899", "#0EA5E9"];
     const list = [...m.entries()]
       .map(([k, v]) => ({
         key: k,
@@ -1306,26 +1433,43 @@ const DashFinanciero = memo(function DashFinanciero({
   /** Caja de consulta (inline-size) para `cqi`; alinea al fondo y estira con la card. */
   const finKpiValueWrap =
     "flex min-h-0 w-full min-w-0 flex-1 [container-type:inline-size] items-end";
-  const finKpiCard = `${finCard} flex h-full min-h-[9.5rem] flex-col`;
-  const finAccent = "#2563EB";
+  const finKpiCard = `group relative ${finCard} flex h-full min-h-[9.5rem] flex-col`;
+  const finAccent = Z.accent;
+  /** Chip de ícono + barra de acento en hover, común a los 4 KPI del financiero. */
+  const finKpiHead = (Icon: LucideIcon, label: string, chip: string, bar: string) => (
+    <>
+      <span className={`pointer-events-none absolute inset-x-0 top-0 h-0.5 origin-left scale-x-0 transition-transform duration-300 ease-out group-hover:scale-x-100 ${bar}`} />
+      <div className="mb-2 flex items-center gap-2.5">
+        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${chip}`}>
+          <Icon className="h-4 w-4" />
+        </span>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      </div>
+    </>
+  );
 
   return (
     <div className="space-y-6 rounded-2xl border border-slate-200/80 bg-gradient-to-b from-slate-50 to-white p-4 sm:space-y-8 sm:p-6 md:p-8">
       <div className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 xl:grid-cols-4 xl:gap-5">
-        <motion.div whileHover={{ y: -2 }} className={finKpiCard}>
-          <p className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Facturado del período</p>
+        <motion.div whileHover={{ y: -3 }} transition={{ type: "spring", stiffness: 400, damping: 28 }} className={finKpiCard}>
+          {finKpiHead(BadgeDollarSign, "Facturado del período", "bg-[#4FAEB2]/12 text-[#3F8E91]", "bg-[#4FAEB2]")}
           <div className={finKpiValueWrap}>
             <FinMontoGs kpi monto={facturadoCohortPeriodo} />
           </div>
         </motion.div>
-        <motion.div whileHover={{ y: -2 }} className={finKpiCard}>
-          <p className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cobrado del período</p>
+        <motion.div whileHover={{ y: -3 }} transition={{ type: "spring", stiffness: 400, damping: 28 }} className={finKpiCard}>
+          {finKpiHead(Wallet, "Cobrado del período", "bg-[#4FAEB2]/12 text-[#3F8E91]", "bg-[#4FAEB2]")}
           <div className={finKpiValueWrap}>
-            <FinMontoGs kpi monto={recaudadoCohortPeriodo} className="text-[#2563EB]" />
+            <FinMontoGs kpi monto={recaudadoCohortPeriodo} className="text-[#3F8E91]" />
           </div>
         </motion.div>
-        <motion.div whileHover={{ y: -2 }} className={finKpiCard}>
-          <p className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Pendiente del período</p>
+        <motion.div whileHover={{ y: -3 }} transition={{ type: "spring", stiffness: 400, damping: 28 }} className={finKpiCard}>
+          {finKpiHead(
+            Clock,
+            "Pendiente del período",
+            carteraPendienteCohort > 0 ? "bg-amber-50 text-amber-600" : "bg-emerald-50 text-emerald-600",
+            carteraPendienteCohort > 0 ? "bg-amber-400" : "bg-emerald-500",
+          )}
           <div className={finKpiValueWrap}>
             <FinMontoGs
               kpi
@@ -1341,8 +1485,8 @@ const DashFinanciero = memo(function DashFinanciero({
             />
           </div>
         </motion.div>
-        <motion.div whileHover={{ y: -2 }} className={finKpiCard}>
-          <p className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-500">% de cobranza</p>
+        <motion.div whileHover={{ y: -3 }} transition={{ type: "spring", stiffness: 400, damping: 28 }} className={finKpiCard}>
+          {finKpiHead(Percent, "% de cobranza", "bg-[#4FAEB2]/12 text-[#3F8E91]", "bg-[#4FAEB2]")}
           <div className={finKpiValueWrap}>
             <p
               className="min-w-0 w-full text-left font-bold tabular-nums leading-none text-slate-900 whitespace-nowrap [font-size:clamp(0.7rem,5.5cqi+0.15rem,1.5rem)]"
@@ -1362,7 +1506,7 @@ const DashFinanciero = memo(function DashFinanciero({
           </div>
           <div className="flex min-w-0 flex-col gap-0.5 sm:items-end sm:text-right">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Total cobrado</p>
-            <FinMontoGs monto={cobradoRegistradoPeriodo} dense className="text-[#2563EB]" />
+            <FinMontoGs monto={cobradoRegistradoPeriodo} dense className="text-[#3F8E91]" />
           </div>
         </div>
         {cobradoPorDiaSerie.length === 0 ? (
@@ -1387,7 +1531,7 @@ const DashFinanciero = memo(function DashFinanciero({
           {composicionModalidad.total > 0 ? (
             <>
               <div
-                className="h-full bg-[#2563EB] transition-[width] duration-300"
+                className="h-full bg-[#4FAEB2] transition-[width] duration-300"
                 style={{ width: `${composicionModalidad.pctContado}%`, minWidth: composicionModalidad.contado > 0 ? 4 : 0 }}
                 title={`Contado ${composicionModalidad.pctContado.toFixed(1)}%`}
               />
@@ -1621,119 +1765,121 @@ const DashInventario = memo(function DashInventario({
     [productos]
   );
 
+  const valorMaxTop = topPorValor.length ? Math.max(...topPorValor.map((p) => p.valor), 1) : 1;
+
   return (
     <div className="space-y-5">
 
       {/* KPIs */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard icon="📦" label="Productos totales"      value={String(totalProductos)} color="text-[#0EA5E9]" variation={4} />
-        <KpiCard icon="🔢" label="Stock total (unidades)" value={formatGs(totalUnidades)} color="text-[#0EA5E9]" />
-        <KpiCard icon="⚠️" label="Bajo stock mínimo"      value={String(bajosStock)}
+        <KpiTile icon={Package} label="Productos totales" value={String(totalProductos)} variation={4} />
+        <KpiTile icon={Boxes} label="Stock total" value={formatGs(totalUnidades)} sub="unidades en existencia" />
+        <KpiTile
+          icon={AlertTriangle}
+          label="Bajo stock mínimo"
+          value={String(bajosStock)}
           sub={bajosStock > 0 ? "requieren reposición" : "todo en orden"}
-          color={bajosStock > 0 ? "text-red-600" : "text-[#0EA5E9]"}
-          variation={bajosStock > 0 ? -2 : undefined} />
-        <KpiCard icon="💎" label="Valor del inventario"   value={`Gs. ${formatGsFull(valorTotal)}`} color="text-[#0EA5E9]" variation={12} />
+          tono={bajosStock > 0 ? "danger" : "success"}
+        />
+        <KpiTile icon={Gem} label="Valor del inventario" value={`Gs. ${formatGsFull(valorTotal)}`} variation={12} />
       </div>
 
-      {/* Donut + Críticos */}
-      <div className="grid grid-cols-3 gap-4">
-        <motion.div whileHover={{ y: -2 }} className="bg-white border border-slate-200 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 p-6">
-          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Estado del stock</h3>
-          <DonutChart segments={[
-            { label: "Saludable", value: cntSaludable, color: "#22c55e" },
-            { label: "Bajo",      value: cntBajo,      color: "#f59e0b" },
-            { label: "Crítico",   value: cntCritico,   color: "#ef4444" },
-          ]} centerLabel="productos" />
-        </motion.div>
-        <motion.div whileHover={{ y: -2 }} className="col-span-2 bg-white border border-slate-200 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 p-6 transition-shadow hover:shadow-md">
-          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">
-            Productos críticos — stock bajo mínimo
-          </h3>
+      {/* Estado del stock + Productos críticos */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <SectionCard icon={Boxes} title="Estado del stock" subtitle={`${totalProductos} productos`}>
+          <DonutChart
+            variant="light"
+            legendDetail
+            segments={[
+              { label: "Saludable", value: cntSaludable, color: Z.success },
+              { label: "Bajo", value: cntBajo, color: "#f59e0b" },
+              { label: "Crítico", value: cntCritico, color: Z.error },
+            ]}
+            centerLabel="productos"
+          />
+        </SectionCard>
+
+        <SectionCard
+          icon={AlertTriangle}
+          title="Productos críticos"
+          subtitle="Stock por debajo del mínimo"
+          className="lg:col-span-2"
+          right={
+            criticos.length > 0 ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600">
+                {criticos.length} para reponer
+              </span>
+            ) : null
+          }
+        >
           {criticos.length === 0 ? (
-            <div className="flex items-center gap-2 text-[var(--badge-success-text)] bg-[var(--badge-success-bg)] rounded-lg px-4 py-3 text-sm">
-              <span>✅</span> Todos los productos tienen stock suficiente.
+            <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-8 text-sm text-emerald-700">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100">✓</span>
+              Todos los productos tienen stock suficiente.
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-lg border border-slate-200">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 border-b border-slate-200">
-                  <tr>
-                    <th className="w-10 px-3 py-3">
-                      <input type="checkbox" className="rounded border-slate-300 text-[#0EA5E9] focus:ring-[#0EA5E9]" />
-                    </th>
-                    {["Producto", "Stock actual", "Stock mín.", "Estado", "Proveedor"].map(h => (
-                      <th key={h} className="text-left text-xs font-semibold text-slate-500 px-3 py-3 uppercase tracking-wide">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {criticos.map(p => (
-                    <tr key={p.id} className={`${p.stock_actual <= 0 ? "bg-red-50/40 dark:bg-red-900/10" : "bg-amber-50/30 dark:bg-amber-900/10"} hover:bg-opacity-80 transition-colors`}>
-                      <td className="px-3 py-2.5">
-                        <input type="checkbox" className="rounded border-slate-300 text-[#0EA5E9] focus:ring-[#0EA5E9]" />
-                      </td>
-                      <td className="px-3 py-2.5 text-xs font-medium text-slate-800 dark:text-slate-200">{p.nombre}</td>
-                      <td className="px-3 py-2.5">
-                        <span className={`text-xs font-bold tabular-nums ${p.stock_actual <= 0 ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400"}`}>
-                          {p.stock_actual} {p.unidad_medida}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400 tabular-nums">{p.stock_minimo} {p.unidad_medida}</td>
-                      <td className="px-3 py-2.5">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          p.stock_actual <= 0 ? "bg-[var(--badge-error-bg)] text-[var(--badge-error-text)]" : "bg-[var(--badge-warning-bg)] text-[var(--badge-warning-text)]"
-                        }`}>
-                          {p.stock_actual <= 0 ? "Crítico" : "Bajo"}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400">{proveedorMap[String(p.id)] ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ul className="divide-y divide-slate-100">
+              {criticos.map((p) => {
+                const critico = p.stock_actual <= 0;
+                return (
+                  <li key={p.id} className="flex items-center gap-3 py-2.5 transition-colors hover:bg-slate-50/70">
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${critico ? "bg-red-500" : "bg-amber-400"}`} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-slate-800">{p.nombre}</p>
+                      <p className="truncate text-xs text-slate-400">{proveedorMap[String(p.id)] ?? "Sin proveedor"}</p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className={`text-sm font-bold tabular-nums ${critico ? "text-red-600" : "text-amber-600"}`}>
+                        {p.stock_actual} {p.unidad_medida}
+                      </p>
+                      <p className="text-[11px] text-slate-400 tabular-nums">mín. {p.stock_minimo}</p>
+                    </div>
+                    <span
+                      className={`hidden shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold sm:inline-flex ${
+                        critico ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-600"
+                      }`}
+                    >
+                      {critico ? "Crítico" : "Bajo"}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
           )}
-        </motion.div>
+        </SectionCard>
       </div>
 
       {/* Top por valor */}
-      <motion.div whileHover={{ y: -2 }} className="bg-white border border-slate-200 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 p-6 transition-shadow hover:shadow-md">
-        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">
-          Top productos por valor de inventario
-        </h3>
+      <SectionCard icon={Gem} title="Top productos por valor de inventario" subtitle="Stock × costo promedio">
         {topPorValor.length === 0 ? (
-          <p className="text-sm text-slate-400 text-center py-6">Sin productos registrados.</p>
+          <p className="py-6 text-center text-sm text-slate-400">Sin productos registrados.</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th className="w-10 px-3 py-3">
-                    <input type="checkbox" className="rounded border-slate-300 text-[#0EA5E9] focus:ring-[#0EA5E9]" />
-                  </th>
-                  {["Producto", "SKU", "Stock", "Costo promedio", "Valor inventario"].map(h => (
-                    <th key={h} className="text-left text-xs font-semibold text-slate-500 px-3 py-3 uppercase tracking-wide">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {topPorValor.map(p => (
-                  <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                    <td className="px-3 py-2.5">
-                      <input type="checkbox" className="rounded border-slate-300 text-[#0EA5E9] focus:ring-[#0EA5E9]" />
-                    </td>
-                    <td className="px-3 py-2.5 text-xs font-medium text-slate-800 dark:text-slate-200">{p.nombre}</td>
-                    <td className="px-3 py-2.5 font-mono text-xs text-slate-500 dark:text-slate-400">{p.sku}</td>
-                    <td className="px-3 py-2.5 text-xs tabular-nums text-slate-700 dark:text-slate-300">{p.stock_actual}</td>
-                    <td className="px-3 py-2.5 text-xs tabular-nums text-slate-500 dark:text-slate-400">Gs. {formatGs(p.costo_promedio)}</td>
-                    <td className="px-3 py-2.5 text-xs tabular-nums font-semibold text-slate-800 dark:text-slate-200">Gs. {formatGs(p.valor)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ul className="space-y-3">
+            {topPorValor.map((p, i) => (
+              <li key={p.id} className="flex items-center gap-3">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#4FAEB2]/10 text-[11px] font-bold text-[#3F8E91]">
+                  {i + 1}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p className="truncate text-sm font-medium text-slate-800">{p.nombre}</p>
+                    <p className="shrink-0 text-sm font-bold tabular-nums text-slate-900">Gs. {formatGs(p.valor)}</p>
+                  </div>
+                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-[#4FAEB2] transition-[width] duration-500"
+                      style={{ width: `${Math.max((p.valor / valorMaxTop) * 100, 2)}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    <span className="font-mono">{p.sku}</span> · {p.stock_actual} u · Gs. {formatGs(p.costo_promedio)} c/u
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
-      </motion.div>
+      </SectionCard>
 
     </div>
   );
@@ -1832,96 +1978,97 @@ const DashVentas = memo(function DashVentas({
 
       {/* KPIs principales */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard icon="📅" label="Ventas del día"    value={`Gs. ${formatGsFull(totalHoy)}`}
-          sub={`${ventasHoy.length} transacciones`} color="text-blue-600" />
-        <KpiCard icon="📆" label="Ventas del mes"    value={`Gs. ${formatGsFull(totalMes)}`}
-          sub={`${ventasMes.length} transacciones`} color="text-indigo-600" />
-        <KpiCard icon="🎫" label="Ticket promedio"   value={`Gs. ${formatGsFull(ticketProm)}`}
-          sub={`periodo: ${periodo}`} />
-        <KpiCard icon="📦" label="Unidades vendidas" value={formatGs(unidades)}
-          sub={`en el periodo`} />
+        <KpiTile icon={CalendarDays} label="Ventas del día" value={`Gs. ${formatGsFull(totalHoy)}`} sub={`${ventasHoy.length} transacciones`} />
+        <KpiTile icon={CalendarRange} label="Ventas del mes" value={`Gs. ${formatGsFull(totalMes)}`} sub={`${ventasMes.length} transacciones`} />
+        <KpiTile icon={Ticket} label="Ticket promedio" value={`Gs. ${formatGsFull(ticketProm)}`} sub={`período: ${periodo}`} />
+        <KpiTile icon={ShoppingBag} label="Unidades vendidas" value={formatGs(unidades)} sub="en el período" />
       </div>
 
-      {/* KPIs rentabilidad */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 flex items-start gap-3">
-          <span className="text-2xl">💰</span>
-          <div>
-            <p className={`text-2xl font-bold tabular-nums ${gananciaHoy >= 0 ? "text-green-600" : "text-red-600"}`}>
-              Gs. {formatGsFull(gananciaHoy)}
-            </p>
-            <p className="text-xs font-semibold text-gray-700 mt-0.5">Ganancia del día</p>
-            <p className="text-xs text-gray-400">precio venta − costo promedio × cant.</p>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 flex items-start gap-3">
-          <span className="text-2xl">📊</span>
-          <div>
-            <p className={`text-2xl font-bold tabular-nums ${margenProm >= 20 ? "text-green-600" : margenProm >= 10 ? "text-amber-600" : "text-red-600"}`}>
-              {margenProm.toFixed(1)}%
-            </p>
-            <p className="text-xs font-semibold text-gray-700 mt-0.5">Margen promedio (hoy)</p>
-            <p className="text-xs text-gray-400">ganancia / precio venta</p>
-          </div>
-        </div>
+      {/* Rentabilidad del día */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <KpiTile
+          icon={Coins}
+          label="Ganancia del día"
+          value={`Gs. ${formatGsFull(gananciaHoy)}`}
+          sub="precio venta − costo × cantidad"
+          tono={gananciaHoy >= 0 ? "success" : "danger"}
+        />
+        <KpiTile
+          icon={Percent}
+          label="Margen promedio (hoy)"
+          value={`${margenProm.toFixed(1)}%`}
+          sub="ganancia / precio de venta"
+          tono={margenProm >= 20 ? "success" : margenProm >= 10 ? "warn" : "danger"}
+        />
       </div>
 
       {/* Productos más vendidos + Ventas por hora */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-          <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">
-            Productos más vendidos
-          </h3>
-          {topProductos.length === 0
-            ? <p className="text-sm text-gray-400 text-center py-6">Sin ventas en el periodo.</p>
-            : <HBarChart data={topProductos} color="bg-indigo-400" />
-          }
-        </div>
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-          <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">
-            Ventas por hora — hoy
-          </h3>
-          {ventasPorHora.every(h => h.value === 0)
-            ? <p className="text-sm text-gray-400 text-center py-6">Sin ventas registradas hoy.</p>
-            : <AreaChart data={ventasPorHora} color="#10b981" />
-          }
-        </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <SectionCard icon={Trophy} title="Productos más vendidos" subtitle="Por unidades en el período">
+          {topProductos.length === 0 ? (
+            <p className="py-8 text-center text-sm text-slate-400">Sin ventas en el período.</p>
+          ) : (
+            <HBarChart data={topProductos} color="bg-[#4FAEB2]" />
+          )}
+        </SectionCard>
+        <SectionCard icon={Clock} title="Ventas por hora" subtitle="Acumulado de hoy">
+          {ventasPorHora.every((h) => h.value === 0) ? (
+            <p className="py-8 text-center text-sm text-slate-400">Sin ventas registradas hoy.</p>
+          ) : (
+            <AreaChart data={ventasPorHora} color={Z.accent} />
+          )}
+        </SectionCard>
       </div>
 
-      {/* Desglose por tipo */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">
-          Desglose por tipo de venta
-        </h3>
+      {/* Desglose por tipo de venta — tarjetas en vez de tabla plana */}
+      <SectionCard icon={ClipboardList} title="Desglose por tipo de venta" subtitle="Contado vs. crédito en el período">
         {ventasFilt.length === 0 ? (
-          <p className="text-sm text-gray-400 text-center py-6">Sin ventas en el periodo seleccionado.</p>
+          <p className="py-8 text-center text-sm text-slate-400">Sin ventas en el período seleccionado.</p>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-100">
-              <tr>
-                {["Tipo", "Cantidad", "Total", "Ticket promedio", "Unidades"].map(h => (
-                  <th key={h} className="text-left text-xs font-semibold text-gray-500 px-3 py-2.5 uppercase tracking-wide">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {desglose.map(r => (
-                <tr key={r.tipo} className="hover:bg-gray-50/60 transition-colors">
-                  <td className="px-3 py-2.5">
-                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${r.tipo === "CONTADO" ? "bg-[var(--badge-success-bg)] text-[var(--badge-success-text)]" : "bg-[#E0F2FE] text-[#0284C7]"}`}>
-                      {r.tipo}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {desglose.map((r) => {
+              const totalGeneral = desglose.reduce((s, x) => s + x.total, 0);
+              const pct = totalGeneral > 0 ? (r.total / totalGeneral) * 100 : 0;
+              const esContado = r.tipo === "CONTADO";
+              return (
+                <div key={r.tipo} className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                  <div className="flex items-center justify-between">
+                    <span
+                      className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                        esContado ? "bg-emerald-50 text-emerald-700" : "bg-[#4FAEB2]/12 text-[#3F8E91]"
+                      }`}
+                    >
+                      {esContado ? "Contado" : "Crédito"}
                     </span>
-                  </td>
-                  <td className="px-3 py-2.5 text-xs tabular-nums text-gray-700">{r.ventas}</td>
-                  <td className="px-3 py-2.5 text-xs tabular-nums font-semibold text-gray-800">Gs. {formatGs(r.total)}</td>
-                  <td className="px-3 py-2.5 text-xs tabular-nums text-gray-500">Gs. {formatGs(Math.round(r.ticket))}</td>
-                  <td className="px-3 py-2.5 text-xs tabular-nums text-gray-500">{r.unid}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <span className="text-xs font-semibold tabular-nums text-slate-400">{pct.toFixed(0)}%</span>
+                  </div>
+                  <p className="mt-3 text-xl font-bold tabular-nums text-slate-900">Gs. {formatGs(r.total)}</p>
+                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className={`h-full rounded-full transition-[width] duration-500 ${esContado ? "bg-emerald-500" : "bg-[#4FAEB2]"}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-200 pt-3 text-center">
+                    <div>
+                      <p className="text-sm font-bold tabular-nums text-slate-800">{r.ventas}</p>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-400">ventas</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold tabular-nums text-slate-800">Gs. {formatGsM(Math.round(r.ticket))}</p>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-400">ticket</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold tabular-nums text-slate-800">{r.unid}</p>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-400">unidades</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
-      </div>
+      </SectionCard>
 
     </div>
   );

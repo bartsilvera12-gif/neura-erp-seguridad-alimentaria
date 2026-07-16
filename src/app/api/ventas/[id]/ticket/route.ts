@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSupabaseFromAuth } from "@/lib/supabase/tenant-api";
 import { membreteA4, membreteTicket } from "@/lib/documentos/membrete";
+import { formatFechaHoraAsuncion } from "@/lib/fecha/asuncion";
 
 /**
  * GET /api/ventas/[id]/ticket?w=58|80&mode=comandas&auto=1
@@ -105,18 +106,9 @@ function formatGs(v: number): string {
   return `Gs. ${Math.round(v).toLocaleString("es-PY")}`;
 }
 
+/** Fecha/hora en zona Paraguay. El server corre en UTC; sin esto la hora sale +3. */
 function formatFecha(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    const hh = String(d.getHours()).padStart(2, "0");
-    const min = String(d.getMinutes()).padStart(2, "0");
-    return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
-  } catch {
-    return iso;
-  }
+  return formatFechaHoraAsuncion(iso);
 }
 
 function modalidadLabel(m: string | null | undefined): string {

@@ -30,3 +30,24 @@ export function esMismoDiaAsuncion(iso: string, now: Date = new Date()): boolean
   const a = asuncionYmd(iso);
   return a !== "" && a === hoyAsuncionYmd(now);
 }
+
+/**
+ * Fecha y hora "DD/MM/YYYY HH:mm" en zona Paraguay, para documentos imprimibles
+ * (tickets, recibos, notas). El server corre en UTC: sin esto un ticket emitido
+ * a las 16:55 PY se imprime "19:55". `formatToParts` evita variaciones de locale.
+ */
+export function formatFechaHoraAsuncion(value: string | number | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  if (isNaN(d.getTime())) return String(value ?? "");
+  const parts = new Intl.DateTimeFormat("es-PY", {
+    timeZone: APP_TIMEZONE,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((x) => x.type === t)?.value ?? "";
+  return `${get("day")}/${get("month")}/${get("year")} ${get("hour")}:${get("minute")}`;
+}

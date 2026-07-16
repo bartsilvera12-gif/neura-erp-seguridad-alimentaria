@@ -23,8 +23,12 @@ export const EMPRESA_DOC = {
   actividad: envList("NEURA_EMPRESA_ACTIVIDAD"),
   telefono: process.env.NEURA_EMPRESA_TELEFONO?.trim() || "",
   direccion: envList("NEURA_EMPRESA_DIRECCION"),
-  /** Logo del cliente (alta calidad, sin fondo). Servido desde /public. Vacío = sin logo. */
-  logoUrl: process.env.NEURA_EMPRESA_LOGO_URL?.trim() || "",
+  /**
+   * Logo del cliente (alta calidad, sin fondo). Servido desde /public.
+   * Default: isotipo de Seguridad Alimentaria (las hojas, sin texto — el nombre
+   * ya se imprime como texto debajo). Override por env si suben otro.
+   */
+  logoUrl: process.env.NEURA_EMPRESA_LOGO_URL?.trim() || "/brand/seguridad-alimentaria-isotipo.png",
 };
 
 function esc(v: unknown): string {

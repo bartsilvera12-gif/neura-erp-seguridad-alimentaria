@@ -78,3 +78,29 @@ export function applyTokenSearch<Q extends { or: (f: string) => Q }>(
   }
   return out;
 }
+
+/**
+ * Igual que `applyTokenSearch` pero SIN acentos: busca contra una columna ya
+ * normalizada (minúsculas y sin tildes) usando el token también normalizado.
+ *
+ * Por qué existe: `ILIKE` distingue acentos, así que "boligrafo" no encontraba
+ * "Bolígrafo" — el filtro del navegador sí normalizaba, y la API no, con lo que
+ * ambos daban resultados distintos para lo mismo.
+ *
+ * `columnaNorm` debe ser una columna generada del estilo
+ * `translate(lower(...), 'áéíóú…', 'aeiou…')` con índice trigram.
+ */
+export function applyTokenSearchSinAcentos<Q extends { or: (f: string) => Q }>(
+  query: Q,
+  q: string,
+  columnaNorm: string
+): Q {
+  const tokens = splitTokens(normalizeText(q));
+  let out = query;
+  for (const tokRaw of tokens) {
+    const tok = escapeIlikeToken(tokRaw);
+    if (!tok) continue;
+    out = out.or(`${columnaNorm}.ilike.%${tok}%`);
+  }
+  return out;
+}

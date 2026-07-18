@@ -3,7 +3,7 @@ import { getTenantSupabaseFromAuth } from "@/lib/supabase/tenant-api";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
 import { signProductoImagen } from "@/lib/inventario/imagen-storage";
-import { applyTokenSearch } from "@/lib/productos/token-search";
+import { applyTokenSearchSinAcentos } from "@/lib/productos/token-search";
 
 interface ProductoSearchHit {
   id: string;
@@ -70,9 +70,11 @@ export async function GET(request: NextRequest) {
       .eq("es_vendible", true);
 
     if (q.length > 0) {
-      // Cada palabra debe aparecer en nombre/sku/codigo_barras (AND entre
-      // tokens, OR entre columnas) → matching orden-independiente.
-      query = applyTokenSearch(query, q, ["nombre", "sku", "codigo_barras"]);
+      // Cada palabra debe aparecer en el texto buscable (AND entre tokens) →
+      // matching orden-independiente Y sin acentos: `busqueda_norm` es una
+      // columna generada con nombre+sku+código en minúsculas y sin tildes, así
+      // "boligrafo" encuentra "Bolígrafo".
+      query = applyTokenSearchSinAcentos(query, q, "busqueda_norm");
     }
 
     query = query.order("nombre").limit(limit);

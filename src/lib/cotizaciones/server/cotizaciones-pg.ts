@@ -170,7 +170,6 @@ export async function getCotizacionVigente(
 
   const delProveedor = await consultarProveedor(origen, destino);
   if (delProveedor) {
-    cache.set(key, { valor: delProveedor, expiraEn: Date.now() + TTL_MS });
     // Se persiste para tener historial y fallback futuro (best-effort).
     try {
       await guardarCotizacion(schemaRaw, empresaId, {
@@ -183,6 +182,11 @@ export async function getCotizacionVigente(
     } catch (e) {
       console.error("[cotizaciones] no se pudo persistir:", e instanceof Error ? e.message : e);
     }
+    // El cache se llena DESPUES de persistir, no antes: `guardarCotizacion`
+    // invalida el cache al terminar (para que una carga manual tenga efecto
+    // inmediato), asi que hacerlo al reves borraba la entrada recien escrita y
+    // dejaba el TTL en cero — cada consulta salia al proveedor.
+    cache.set(key, { valor: delProveedor, expiraEn: Date.now() + TTL_MS });
     return delProveedor;
   }
 

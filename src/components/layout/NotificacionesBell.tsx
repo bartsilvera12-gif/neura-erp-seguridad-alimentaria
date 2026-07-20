@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, FileClock, FileWarning } from "lucide-react";
+import { Bell, FileClock, FileWarning, PackageX, PackageSearch, Truck, Clock } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 
 interface Notif {
@@ -11,6 +12,8 @@ interface Notif {
   titulo: string;
   mensaje: string;
   documento_id: string | null;
+  numero_control: string | null;
+  producto_id: string | null;
   url: string | null;
   leida: boolean;
   created_at: string;
@@ -18,10 +21,30 @@ interface Notif {
 
 const POLL_MS = 60_000;
 
-/** Ícono por tipo: vencido pesa más que por vencer. */
-function IconoNotif({ tipo }: { tipo: string }) {
-  const Icon = tipo === "documento_vencido" ? FileWarning : FileClock;
-  return <Icon className="h-4 w-4" />;
+/**
+ * Estilo por origen. El color es información, no decoración:
+ *   · Documentos (vencimientos) → AZUL
+ *   · Inventario (stock)        → ROJO
+ *   · Compras (órdenes)         → ámbar, salvo atraso que también va en rojo
+ * Un tipo desconocido cae al gris neutro en vez de romper.
+ */
+const NOTIF_ESTILO: Record<string, { Icon: LucideIcon; chip: string; punto: string }> = {
+  // Documentos — azul
+  documento_por_vencer: { Icon: FileClock, chip: "bg-blue-50 text-blue-600", punto: "bg-blue-500" },
+  documento_vencido: { Icon: FileWarning, chip: "bg-blue-100 text-blue-700", punto: "bg-blue-600" },
+  // Inventario — rojo
+  stock_bajo: { Icon: PackageSearch, chip: "bg-red-50 text-red-600", punto: "bg-red-500" },
+  sin_stock: { Icon: PackageX, chip: "bg-red-100 text-red-700", punto: "bg-red-600" },
+  // Compras — ámbar (el atraso sí es rojo)
+  orden_recepcion_parcial: { Icon: Truck, chip: "bg-amber-50 text-amber-600", punto: "bg-amber-500" },
+  orden_por_llegar: { Icon: Clock, chip: "bg-amber-50 text-amber-600", punto: "bg-amber-500" },
+  orden_atrasada: { Icon: Truck, chip: "bg-red-50 text-red-600", punto: "bg-red-500" },
+};
+
+const ESTILO_NEUTRO = { Icon: Bell, chip: "bg-slate-100 text-slate-500", punto: "bg-slate-400" };
+
+function estiloDe(tipo: string) {
+  return NOTIF_ESTILO[tipo] ?? ESTILO_NEUTRO;
 }
 
 export default function NotificacionesBell() {
@@ -120,19 +143,20 @@ export default function NotificacionesBell() {
                     >
                       <span
                         className={`mt-0.5 shrink-0 rounded-lg p-1.5 ${
-                          n.leida
-                            ? "bg-slate-100 text-slate-400"
-                            : n.tipo === "documento_vencido"
-                              ? "bg-red-50 text-red-600"
-                              : "bg-amber-50 text-amber-600"
+                          n.leida ? "bg-slate-100 text-slate-400" : estiloDe(n.tipo).chip
                         }`}
                       >
-                        <IconoNotif tipo={n.tipo} />
+                        {(() => {
+                          const Icon = estiloDe(n.tipo).Icon;
+                          return <Icon className="h-4 w-4" />;
+                        })()}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-2">
                           <span className="truncate text-xs font-bold text-slate-800">{n.titulo}</span>
-                          {!n.leida && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />}
+                          {!n.leida && (
+                            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${estiloDe(n.tipo).punto}`} />
+                          )}
                         </span>
                         <span className="mt-0.5 block text-xs leading-snug text-slate-500">{n.mensaje}</span>
                       </span>

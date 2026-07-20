@@ -7,6 +7,7 @@ import {
   listNotificaciones,
   evaluarDocumentosPorVencer,
   evaluarOrdenesPendientes,
+  evaluarStockBajo,
 } from "@/lib/notificaciones/server";
 
 /**
@@ -36,6 +37,11 @@ export async function GET(request: NextRequest) {
       await evaluarOrdenesPendientes(schema, ctx.auth.empresa_id);
     } catch (e) {
       console.error("[/api/notificaciones] evaluar órdenes:", e instanceof Error ? e.message : e);
+    }
+    try {
+      await evaluarStockBajo(schema, ctx.auth.empresa_id);
+    } catch (e) {
+      console.error("[/api/notificaciones] evaluar stock:", e instanceof Error ? e.message : e);
     }
 
     try {

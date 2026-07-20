@@ -20,6 +20,9 @@ export const TIPO_DOC_VENCIDO = "documento_vencido";
 export const TIPO_ORDEN_PARCIAL = "orden_recepcion_parcial";
 export const TIPO_ORDEN_POR_LLEGAR = "orden_por_llegar";
 export const TIPO_ORDEN_ATRASADA = "orden_atrasada";
+/** Inventario: reposición. */
+export const TIPO_STOCK_BAJO = "stock_bajo";
+export const TIPO_SIN_STOCK = "sin_stock";
 
 function pool() {
   const p = getChatPostgresPool();
@@ -34,12 +37,13 @@ export interface NotificacionRow {
   mensaje: string;
   documento_id: string | null;
   numero_control: string | null;
+  producto_id: string | null;
   url: string | null;
   leida: boolean;
   created_at: string;
 }
 
-const COLS = "id, tipo, titulo, mensaje, documento_id, numero_control, url, leida, created_at";
+const COLS = "id, tipo, titulo, mensaje, documento_id, numero_control, producto_id, url, leida, created_at";
 
 export async function listNotificaciones(
   schemaRaw: string,
@@ -249,6 +253,86 @@ export async function evaluarOrdenesPendientes(
          WHERE leida = false AND numero_control IS NOT NULL
        DO NOTHING`,
       [empresaId, tipo, titulo, mensaje, o.numero_control, `/compras?orden=${encodeURIComponent(o.numero_control)}`]
+    );
+    creadas += r.rowCount ?? 0;
+  }
+  return creadas;
+}
+
+// Throttle propio para el barrido de stock.
+const ultimaEvalStock = new Map<string, number>();
+
+/**
+ * Genera avisos de reposición de inventario. Misma tabla y misma campanita que
+ * documentos y órdenes: un solo sistema de notificaciones.
+ *
+ * Tipos que emite:
+ *   - `sin_stock`:   el producto quedó en 0 (o negativo).
+ *   - `stock_bajo`:  stock por debajo o igual al mínimo configurado.
+ *
+ * Solo mira productos activos que controlan stock y tienen un mínimo definido
+ * (`stock_minimo > 0`): sin un mínimo cargado no hay umbral contra el cual
+ * avisar, y avisaríamos de todo el catálogo. Los productos recién cargados con
+ * mínimo 0 no generan ruido.
+ *
+ * Best-effort y throttled, igual que el resto: se dispara desde el GET de la
+ * campanita, sin cron.
+ */
+export async function evaluarStockBajo(
+  schemaRaw: string,
+  empresaId: string
+): Promise<number> {
+  const now = Date.now();
+  const last = ultimaEvalStock.get(empresaId) ?? 0;
+  if (now - last < EVAL_THROTTLE_MS) return 0;
+  ultimaEvalStock.set(empresaId, now);
+
+  const schema = assertAllowedChatDataSchema(schemaRaw);
+  const productos = quoteSchemaTable(schema, "productos");
+  const notifs = quoteSchemaTable(schema, "notificaciones");
+  const p = pool();
+
+  const { rows } = await p.query<{
+    id: string;
+    nombre: string;
+    sku: string;
+    stock_actual: string;
+    stock_minimo: string;
+    unidad_medida: string | null;
+  }>(
+    `SELECT id, nombre, sku, stock_actual, stock_minimo, unidad_medida
+       FROM ${productos}
+      WHERE empresa_id = $1::uuid
+        AND activo = true
+        AND controla_stock = true
+        AND stock_minimo > 0
+        AND stock_actual <= stock_minimo
+      ORDER BY stock_actual ASC
+      LIMIT 50`,
+    [empresaId]
+  );
+  if (rows.length === 0) return 0;
+
+  let creadas = 0;
+  for (const prod of rows) {
+    const stock = Number(prod.stock_actual) || 0;
+    const minimo = Number(prod.stock_minimo) || 0;
+    const unidad = (prod.unidad_medida ?? "").trim();
+    const agotado = stock <= 0;
+
+    const tipo = agotado ? TIPO_SIN_STOCK : TIPO_STOCK_BAJO;
+    const titulo = agotado ? "Producto sin stock" : "Stock bajo";
+    const mensaje = agotado
+      ? `${prod.nombre} (${prod.sku}) se quedó sin stock. Mínimo: ${minimo}${unidad ? ` ${unidad}` : ""}.`
+      : `${prod.nombre} (${prod.sku}): quedan ${stock}${unidad ? ` ${unidad}` : ""}, por debajo del mínimo de ${minimo}. Conviene reponer.`;
+
+    const r = await p.query(
+      `INSERT INTO ${notifs} (empresa_id, tipo, titulo, mensaje, producto_id, url)
+       VALUES ($1::uuid, $2, $3, $4, $5::uuid, $6)
+       ON CONFLICT (empresa_id, producto_id, tipo)
+         WHERE leida = false AND producto_id IS NOT NULL
+       DO NOTHING`,
+      [empresaId, tipo, titulo, mensaje, prod.id, `/inventario/${prod.id}/editar`]
     );
     creadas += r.rowCount ?? 0;
   }

@@ -3,7 +3,11 @@ import { getTenantSupabaseFromAuth } from "@/lib/supabase/tenant-api";
 import { fetchDataSchemaForEmpresaId } from "@/lib/supabase/empresa-data-schema";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
-import { listNotificaciones, evaluarDocumentosPorVencer } from "@/lib/notificaciones/server";
+import {
+  listNotificaciones,
+  evaluarDocumentosPorVencer,
+  evaluarOrdenesPendientes,
+} from "@/lib/notificaciones/server";
 
 /**
  * GET /api/notificaciones
@@ -21,10 +25,17 @@ export async function GET(request: NextRequest) {
     if (!ctx) return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
     const schema = await fetchDataSchemaForEmpresaId(ctx.auth.empresa_id);
 
+    // Dos orígenes, una sola campanita. Cada evaluador tiene su propio throttle
+    // y es best-effort: si uno falla, el otro y el listado siguen andando.
     try {
       await evaluarDocumentosPorVencer(schema, ctx.auth.empresa_id);
     } catch (e) {
-      console.error("[/api/notificaciones] evaluar:", e instanceof Error ? e.message : e);
+      console.error("[/api/notificaciones] evaluar documentos:", e instanceof Error ? e.message : e);
+    }
+    try {
+      await evaluarOrdenesPendientes(schema, ctx.auth.empresa_id);
+    } catch (e) {
+      console.error("[/api/notificaciones] evaluar órdenes:", e instanceof Error ? e.message : e);
     }
 
     try {

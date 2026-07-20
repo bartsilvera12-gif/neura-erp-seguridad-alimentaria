@@ -16,6 +16,10 @@ import { hoyAsuncionYmd } from "@/lib/fecha/asuncion";
 
 export const TIPO_DOC_POR_VENCER = "documento_por_vencer";
 export const TIPO_DOC_VENCIDO = "documento_vencido";
+/** Órdenes de compra con mercadería pendiente de recibir. */
+export const TIPO_ORDEN_PARCIAL = "orden_recepcion_parcial";
+export const TIPO_ORDEN_POR_LLEGAR = "orden_por_llegar";
+export const TIPO_ORDEN_ATRASADA = "orden_atrasada";
 
 function pool() {
   const p = getChatPostgresPool();
@@ -29,12 +33,13 @@ export interface NotificacionRow {
   titulo: string;
   mensaje: string;
   documento_id: string | null;
+  numero_control: string | null;
   url: string | null;
   leida: boolean;
   created_at: string;
 }
 
-const COLS = "id, tipo, titulo, mensaje, documento_id, url, leida, created_at";
+const COLS = "id, tipo, titulo, mensaje, documento_id, numero_control, url, leida, created_at";
 
 export async function listNotificaciones(
   schemaRaw: string,
@@ -145,6 +150,105 @@ export async function evaluarDocumentosPorVencer(
          WHERE leida = false AND documento_id IS NOT NULL
        DO NOTHING`,
       [empresaId, tipo, titulo, mensaje, d.id, "/documentos"]
+    );
+    creadas += r.rowCount ?? 0;
+  }
+  return creadas;
+}
+
+// Throttle propio para el barrido de órdenes.
+const ultimaEvalOrdenes = new Map<string, number>();
+
+/**
+ * Genera avisos de mercadería pendiente de recibir. Reutiliza la MISMA tabla y
+ * la misma campanita que los documentos: no hay un segundo sistema.
+ *
+ * Tipos que emite:
+ *   - `orden_recepcion_parcial`: quedó saldo tras una entrega parcial.
+ *   - `orden_por_llegar`: la fecha estimada está dentro de los próximos 3 días.
+ *   - `orden_atrasada`: la fecha estimada ya pasó y sigue pendiente.
+ *
+ * Deja de emitir solo cuando la orden queda `completa` o `cancelada`, porque la
+ * consulta filtra por `estado_recepcion IN ('pendiente','parcial')`.
+ *
+ * Best-effort y throttled: se llama desde el GET de la campanita, igual que los
+ * documentos, así no hace falta cron.
+ */
+export async function evaluarOrdenesPendientes(
+  schemaRaw: string,
+  empresaId: string
+): Promise<number> {
+  const now = Date.now();
+  const last = ultimaEvalOrdenes.get(empresaId) ?? 0;
+  if (now - last < EVAL_THROTTLE_MS) return 0;
+  ultimaEvalOrdenes.set(empresaId, now);
+
+  const schema = assertAllowedChatDataSchema(schemaRaw);
+  const compras = quoteSchemaTable(schema, "compras");
+  const notifs = quoteSchemaTable(schema, "notificaciones");
+  const p = pool();
+  const hoy = hoyAsuncionYmd();
+
+  // Una fila por ORDEN (no por línea): se agrupa por numero_control.
+  const { rows } = await p.query<{
+    numero_control: string;
+    proveedor_nombre: string;
+    productos_pendientes: string;
+    unidades_pendientes: string;
+    fecha_estimada: string | null;
+    dias_para_llegada: string | null;
+  }>(
+    `SELECT numero_control,
+            MIN(proveedor_nombre) AS proveedor_nombre,
+            COUNT(*) FILTER (WHERE cantidad - cantidad_recibida > 0) AS productos_pendientes,
+            COALESCE(SUM(cantidad - cantidad_recibida), 0) AS unidades_pendientes,
+            MIN(fecha_estimada_llegada)::text AS fecha_estimada,
+            (MIN(fecha_estimada_llegada) - $2::date) AS dias_para_llegada
+       FROM ${compras}
+      WHERE empresa_id = $1::uuid
+        AND estado_recepcion IN ('pendiente', 'parcial')
+        AND anulada_at IS NULL
+      GROUP BY numero_control
+     HAVING COALESCE(SUM(cantidad - cantidad_recibida), 0) > 0`,
+    [empresaId, hoy]
+  );
+  if (rows.length === 0) return 0;
+
+  let creadas = 0;
+  for (const o of rows) {
+    const unidades = Number(o.unidades_pendientes) || 0;
+    const productos = Number(o.productos_pendientes) || 0;
+    const dias = o.dias_para_llegada == null ? null : Number(o.dias_para_llegada);
+
+    let tipo: string | null = null;
+    let titulo = "";
+    let mensaje = "";
+
+    const detalle = `faltan ${unidades} unidad${unidades === 1 ? "" : "es"} en ${productos} producto${productos === 1 ? "" : "s"}`;
+
+    if (dias != null && dias < 0) {
+      tipo = TIPO_ORDEN_ATRASADA;
+      titulo = "Entrega atrasada";
+      mensaje = `Orden ${o.numero_control} (${o.proveedor_nombre}): ${detalle}. Llegada estimada ${o.fecha_estimada}, atrasada ${Math.abs(dias)} día${Math.abs(dias) === 1 ? "" : "s"}.`;
+    } else if (dias != null && dias <= 3) {
+      tipo = TIPO_ORDEN_POR_LLEGAR;
+      titulo = "Pedido por llegar";
+      mensaje = `Orden ${o.numero_control} (${o.proveedor_nombre}): ${detalle}. Llegada estimada: ${o.fecha_estimada}.`;
+    } else {
+      tipo = TIPO_ORDEN_PARCIAL;
+      titulo = "Mercadería pendiente";
+      mensaje = o.fecha_estimada
+        ? `Orden ${o.numero_control} (${o.proveedor_nombre}): ${detalle}. Llegada estimada: ${o.fecha_estimada}.`
+        : `Orden ${o.numero_control} (${o.proveedor_nombre}): ${detalle}. Sin fecha estimada de llegada.`;
+    }
+
+    const r = await p.query(
+      `INSERT INTO ${notifs} (empresa_id, tipo, titulo, mensaje, numero_control, url)
+       VALUES ($1::uuid, $2, $3, $4, $5, $6)
+       ON CONFLICT (empresa_id, numero_control, tipo)
+         WHERE leida = false AND numero_control IS NOT NULL
+       DO NOTHING`,
+      [empresaId, tipo, titulo, mensaje, o.numero_control, `/compras?orden=${encodeURIComponent(o.numero_control)}`]
     );
     creadas += r.rowCount ?? 0;
   }

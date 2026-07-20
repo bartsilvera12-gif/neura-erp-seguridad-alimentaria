@@ -176,9 +176,14 @@ export default function InventarioPage() {
     };
   }, [universo]);
 
+  /** Filtros que ACOTAN resultados: definen el mensaje de "sin resultados". */
   const hayFiltros =
     busqueda.trim() !== "" || filtroEstado !== "" || filtroUbicacion !== "" ||
     filtroPrecio !== "" || filtroBarras !== "" || filtroMargen !== "";
+
+  /** El orden no acota, pero sí es "algo configurado": el botón debe avisarlo
+   *  porque el panel está plegado y no se ve desde afuera. */
+  const hayAjustes = hayFiltros || orden !== "nombre";
 
   function limpiarFiltros() {
     setBusqueda("");
@@ -187,6 +192,7 @@ export default function InventarioPage() {
     setFiltroPrecio("");
     setFiltroBarras("");
     setFiltroMargen("");
+    setOrden("nombre");
     setPagina(1);
   }
 
@@ -317,31 +323,19 @@ export default function InventarioPage() {
             />
           </div>
 
-          <select
-            value={orden}
-            onChange={(e) => setOrden(e.target.value as typeof orden)}
-            className={`${inputClass} w-auto`}
-            aria-label="Ordenar"
-          >
-            <option value="nombre">Nombre (A-Z)</option>
-            <option value="stock_asc">Menor stock primero</option>
-            <option value="valor_desc">Mayor valor en stock</option>
-            <option value="margen_desc">Mayor margen</option>
-          </select>
-
           <button
             type="button"
             onClick={() => setVerFiltros((v) => !v)}
-            className={`${btnSecundario} ${verFiltros || hayFiltros ? "border-[#4FAEB2] text-[#3F8E91]" : ""}`}
+            className={`${btnSecundario} ${verFiltros || hayAjustes ? "border-[#4FAEB2] text-[#3F8E91]" : ""}`}
           >
             <SlidersHorizontal className="h-4 w-4" />
-            Filtros
-            {hayFiltros && (
+            Filtros y orden
+            {hayAjustes && (
               <span className="ml-1 rounded-full bg-[#4FAEB2] px-1.5 text-[10px] font-bold text-white">•</span>
             )}
           </button>
 
-          {hayFiltros && (
+          {hayAjustes && (
             <button type="button" onClick={limpiarFiltros} className={btnSecundario}>
               <X className="h-3.5 w-3.5" />
               Limpiar
@@ -351,6 +345,15 @@ export default function InventarioPage() {
 
         {verFiltros && (
           <div className="mt-3 grid grid-cols-1 gap-3 border-t border-slate-100 pt-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">Ordenar por</label>
+              <select value={orden} onChange={(e) => setOrden(e.target.value as typeof orden)} className={inputClass}>
+                <option value="nombre">Nombre (A-Z)</option>
+                <option value="stock_asc">Menor stock primero</option>
+                <option value="valor_desc">Mayor valor en stock</option>
+                <option value="margen_desc">Mayor margen</option>
+              </select>
+            </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-500">Estado de stock</label>
               <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value as EstadoStock | "")} className={inputClass}>

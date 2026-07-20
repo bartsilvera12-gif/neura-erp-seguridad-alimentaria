@@ -3,6 +3,7 @@ import { getTenantSupabaseFromAuth } from "@/lib/supabase/tenant-api";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
 import { normalizeUpperText, normalizeUpperCodigoBarras } from "@/lib/text/normalize";
+import { aGramos, esPesoUnidad, type PesoUnidad } from "@/lib/inventario/peso";
 import type { AppSupabaseClient } from "@/lib/supabase/schema";
 
 const PRODUCTO_COLS =
@@ -11,7 +12,8 @@ const PRODUCTO_COLS =
   "codigo_barras, codigo_barras_interno, imagen_path, imagen_url, " +
   "categoria_principal_id, ubicacion_principal_id, proveedor_principal_id, " +
   "es_vendible, es_insumo, controla_stock, valorizado, unidad_compra, unidad_receta, " +
-  "factor_compra_receta, tiempo_prep_minutos, descripcion, precio_mayorista, cantidad_minima_mayorista, precio_distribuidor, modo_receta, tipo_iva";
+  "factor_compra_receta, tiempo_prep_minutos, descripcion, precio_mayorista, cantidad_minima_mayorista, precio_distribuidor, modo_receta, tipo_iva, " +
+  "peso_gramos, peso_unidad";
 
 function toNumber(v: unknown): unknown {
   return typeof v === "string" ? Number(v) : v;
@@ -49,6 +51,27 @@ async function existsId(
     .limit(1);
   if (error) throw new Error(error.message);
   return (data ?? []).length > 0;
+}
+
+
+/**
+ * Normaliza el peso que manda el cliente.
+ *
+ * El front envia `peso` en la unidad que eligio el usuario mas `peso_unidad`.
+ * Aca se convierte a gramos, que es como se guarda siempre. Devuelve
+ * `undefined` cuando el campo no vino (para no pisar el valor existente) y
+ * `null` cuando vino vacio (borrar el peso).
+ */
+function parsePeso(body: Record<string, unknown>): { peso_gramos: number | null; peso_unidad: PesoUnidad } | undefined {
+  const crudo = body.peso;
+  const unidad = esPesoUnidad(body.peso_unidad) ? body.peso_unidad : "kg";
+  if (crudo === undefined && body.peso_unidad === undefined) return undefined;
+  if (crudo === null || crudo === "" || crudo === undefined) {
+    return { peso_gramos: null, peso_unidad: unidad };
+  }
+  const n = Number(crudo);
+  if (!Number.isFinite(n) || n <= 0) return { peso_gramos: null, peso_unidad: unidad };
+  return { peso_gramos: aGramos(n, unidad), peso_unidad: unidad };
 }
 
 export async function GET(
@@ -113,6 +136,11 @@ export async function PATCH(
     if (body.imagen_url !== undefined) {
       const v = body.imagen_url != null ? String(body.imagen_url) : "";
       patch.imagen_url = v || null;
+    }
+    const peso = parsePeso(body as Record<string, unknown>);
+    if (peso) {
+      patch.peso_gramos = peso.peso_gramos;
+      patch.peso_unidad = peso.peso_unidad;
     }
 
     let categoriaCambia = false;

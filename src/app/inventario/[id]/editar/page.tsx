@@ -7,6 +7,8 @@ import MontoInput from "@/components/ui/MontoInput";
 import { getProducto, productoExiste, updateProducto } from "@/lib/inventario/storage";
 import type { MetodoValuacion, TipoIvaProducto } from "@/lib/inventario/types";
 import ProductImageUploader from "@/components/inventario/ProductImageUploader";
+import ProductoDocumentos from "@/components/inventario/ProductoDocumentos";
+import { PESO_UNIDADES, desdeGramos, esPesoUnidad, type PesoUnidad } from "@/lib/inventario/peso";
 import SelectFromList from "@/components/inventario/SelectFromList";
 import ProveedoresCostos from "@/components/inventario/ProveedoresCostos";
 import { MargenPorCanal } from "@/components/inventario/MargenPorCanal";
@@ -45,6 +47,8 @@ export default function EditarProductoPage() {
     stock_actual: "",
     stock_minimo: "",
     unidad_medida: "",
+    peso: "",
+    peso_unidad: "kg" as PesoUnidad,
     metodo_valuacion: "CPP" as MetodoValuacion,
     tipo_iva: "10%" as TipoIvaProducto,
   });
@@ -184,6 +188,11 @@ export default function EditarProductoPage() {
         stock_actual: String(p.stock_actual),
         stock_minimo: String(p.stock_minimo),
         unidad_medida: p.unidad_medida,
+        // La base guarda gramos; se muestra en la unidad que eligio el usuario.
+        peso: p.peso_gramos != null
+          ? String(desdeGramos(p.peso_gramos, esPesoUnidad(p.peso_unidad) ? p.peso_unidad : "kg"))
+          : "",
+        peso_unidad: esPesoUnidad(p.peso_unidad) ? p.peso_unidad : "kg",
         metodo_valuacion: p.metodo_valuacion,
         tipo_iva: (p.tipo_iva ?? "10%") as TipoIvaProducto,
       });
@@ -325,6 +334,8 @@ export default function EditarProductoPage() {
         stock_actual: parseInt(form.stock_actual) || 0,
         stock_minimo: parseInt(form.stock_minimo) || 0,
         unidad_medida: form.unidad_medida.trim().toUpperCase() || "UNIDAD",
+        peso: form.peso.trim() === "" ? null : Number(form.peso),
+        peso_unidad: form.peso_unidad,
         metodo_valuacion: form.metodo_valuacion,
         categoria_principal_id: categoriaId,
         ubicacion_principal_id: ubicacionId,
@@ -499,6 +510,43 @@ export default function EditarProductoPage() {
           </div>
 
           {/* Codigo de barras */}
+          {/* Peso — dato adicional para costear el flete de importacion.
+              NO reemplaza a la unidad de medida comercial. */}
+          <div className="border-t border-slate-100 pt-5">
+            <label className={labelClass}>Peso del producto</label>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                name="peso"
+                value={form.peso}
+                onChange={handleChange}
+                min={0}
+                step="any"
+                placeholder="Ej: 250"
+                className={inputClass}
+              />
+              <select
+                name="peso_unidad"
+                value={form.peso_unidad}
+                onChange={handleChange}
+                className={`${inputClass} w-44 shrink-0`}
+              >
+                {PESO_UNIDADES.map((u) => (
+                  <option key={u.value} value={u.value}>{u.label}</option>
+                ))}
+              </select>
+            </div>
+            <span className="mt-1 block text-[11px] text-gray-400">
+              Opcional. Se usa para calcular el flete de productos importados. La unidad de venta no cambia.
+            </span>
+          </div>
+
+          {/* Documentacion adjunta: ficha tecnica y demas archivos del producto. */}
+          <div className="border-t border-slate-100 pt-5">
+            <label className={labelClass}>Documentación</label>
+            <ProductoDocumentos productoId={id} />
+          </div>
+
           <div className="border-t border-slate-100 pt-5">
             <label className={labelClass}>Código de barras</label>
             <div className="flex gap-2">

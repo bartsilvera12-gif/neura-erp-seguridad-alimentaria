@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { PESO_UNIDADES, type PesoUnidad } from "@/lib/inventario/peso";
 import { useRouter } from "next/navigation";
 import MontoInput from "@/components/ui/MontoInput";
 import SelectFromList from "@/components/inventario/SelectFromList";
@@ -44,6 +45,8 @@ export default function NuevoProductoPage() {
     stock_actual: "",
     stock_minimo: "",
     unidad_medida: "UNIDAD",
+    peso: "",
+    peso_unidad: "kg" as PesoUnidad,
     metodo_valuacion: "CPP" as MetodoValuacion,
     tipo_iva: "10%" as TipoIvaProducto,
   });
@@ -316,6 +319,8 @@ export default function NuevoProductoPage() {
           stock_actual: parseInt(form.stock_actual) || 0,
           stock_minimo: parseInt(form.stock_minimo) || 0,
           unidad_medida: form.unidad_medida.trim().toUpperCase(),
+          peso: form.peso.trim() === "" ? null : Number(form.peso),
+          peso_unidad: form.peso_unidad,
           metodo_valuacion: form.metodo_valuacion,
           codigo_barras: codigo,
           codigo_barras_interno: interno,
@@ -523,6 +528,37 @@ export default function NuevoProductoPage() {
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Peso — dato adicional para costear el flete de importacion.
+              NO reemplaza a la unidad de medida comercial (sigue siendo UNIDAD). */}
+          <div className="border-t border-slate-100 pt-5">
+            <label className={labelClass}>Peso del producto</label>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                name="peso"
+                value={form.peso}
+                onChange={handleChange}
+                min={0}
+                step="any"
+                placeholder="Ej: 250"
+                className={inputClass}
+              />
+              <select
+                name="peso_unidad"
+                value={form.peso_unidad}
+                onChange={handleChange}
+                className={`${inputClass} w-44 shrink-0`}
+              >
+                {PESO_UNIDADES.map((u) => (
+                  <option key={u.value} value={u.value}>{u.label}</option>
+                ))}
+              </select>
+            </div>
+            <span className="mt-1 block text-[11px] text-gray-400">
+              Opcional. Se usa para calcular el flete de productos importados. La unidad de venta sigue siendo la de arriba.
+            </span>
           </div>
 
           {/* Código de barras (escaneable, separado del SKU) */}

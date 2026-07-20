@@ -1,5 +1,6 @@
 import { getCurrentUser } from "@/lib/auth";
 import { getBrowserSupabaseForEmpresaData } from "@/lib/supabase/browser-data-client";
+import type { PesoUnidad } from "./peso";
 import type {
   Producto,
   MovimientoInventario,
@@ -177,7 +178,19 @@ export async function productoExiste(
   );
 }
 
-export type NuevoProductoData = Omit<Producto, "id">;
+/**
+ * Campos que se ESCRIBEN pero no existen tal cual en `Producto`.
+ *
+ * El peso viaja en la unidad que eligio el usuario (`peso` + `peso_unidad`) y
+ * es el servidor el que lo convierte a `peso_gramos`. Asi la conversion ocurre
+ * en un solo lugar y no depende de que cada pantalla se acuerde de hacerla.
+ */
+export interface ProductoWriteExtras {
+  peso?: number | null;
+  peso_unidad?: PesoUnidad;
+}
+
+export type NuevoProductoData = Omit<Producto, "id"> & ProductoWriteExtras;
 
 /**
  * Crea producto via API server-side (POST /api/productos).
@@ -227,6 +240,8 @@ export async function saveProducto(
         : 0,
     descripcion: datos.descripcion ?? null,
     tipo_iva: datos.tipo_iva ?? "10%",
+    peso: datos.peso ?? null,
+    peso_unidad: datos.peso_unidad ?? "kg",
   };
 
   const res = await fetch("/api/productos", {
@@ -260,7 +275,7 @@ export async function updateProductoPrecios(
 /** Actualiza producto via API server-side (PATCH /api/productos/[id]). */
 export async function updateProducto(
   id: string,
-  datos: Partial<Omit<Producto, "id">>
+  datos: Partial<Omit<Producto, "id">> & ProductoWriteExtras
 ): Promise<Producto | null> {
   const body: Record<string, unknown> = {};
   if (datos.nombre !== undefined) body.nombre = datos.nombre;
@@ -294,6 +309,10 @@ export async function updateProducto(
   if (datos.descripcion !== undefined) body.descripcion = datos.descripcion;
   if (datos.modo_receta !== undefined) body.modo_receta = datos.modo_receta;
   if (datos.tipo_iva !== undefined) body.tipo_iva = datos.tipo_iva;
+  if (datos.peso !== undefined) {
+    body.peso = datos.peso;
+    body.peso_unidad = datos.peso_unidad ?? "kg";
+  }
 
   const res = await fetch(`/api/productos/${encodeURIComponent(id)}`, {
     method: "PATCH",

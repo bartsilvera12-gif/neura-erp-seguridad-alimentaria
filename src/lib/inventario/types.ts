@@ -3,6 +3,9 @@ export type TipoMovimiento = "ENTRADA" | "SALIDA" | "AJUSTE";
 export type OrigenMovimiento = "compra" | "venta" | "ajuste_manual" | "inventario_inicial" | "anulacion_venta" | "anulacion_compra" | "produccion";
 export type TipoIvaProducto = "EXENTA" | "5%" | "10%";
 
+import type { PesoUnidad } from "./peso";
+export type { PesoUnidad };
+
 export interface Producto {
   id: string;
   nombre: string;
@@ -18,6 +21,14 @@ export interface Producto {
   stock_actual: number;
   stock_minimo: number;
   unidad_medida: string;
+  /**
+   * Peso unitario SIEMPRE en gramos, sin importar la unidad que eligio el
+   * usuario. Es el valor canonico para las formulas de flete. Convertir con
+   * los helpers de lib/inventario/peso, nunca a mano.
+   */
+  peso_gramos?: number | null;
+  /** Solo presentacion: en que unidad (g|kg) se le muestra el peso. */
+  peso_unidad?: PesoUnidad;
   metodo_valuacion: MetodoValuacion;
   codigo_barras?: string | null;
   codigo_barras_interno?: boolean;

@@ -25,6 +25,10 @@ export const SLUGS_PERMITIDOS_ROL_USUARIO_LIMITADO: ReadonlySet<string> = new Se
   "presupuestos",
   // Alta y consulta de clientes.
   "clientes",
+  // CRM Funnel: el rol operativo trabaja su propio pipeline. El servidor lo
+  // acota a los leads donde figura como responsable (ver lib/crm/server/crm-scope),
+  // así que ver el módulo no implica ver los leads de los demás.
+  "crm",
   // Recetario: TODOS los roles pueden FABRICAR desde una receta. La edición del
   // recetario (crear/editar/eliminar) queda restringida a admin/supervisor —
   // ver `puedeEditarRecetas` y los guards de /api/recetas/*.

@@ -34,7 +34,12 @@ export interface Prospecto {
     | "automatizacion"
     | "otro";
   origen_detalle?:      string | null;
-  responsable?:          string;       // nombre del responsable de seguimiento
+  responsable?:          string;       // nombre del responsable (snapshot para mostrar)
+  /**
+   * Usuario del catalogo asignado. Es la FUENTE REAL de la asignacion: el
+   * scope por responsable del servidor filtra por este id, no por el nombre.
+   */
+  responsable_usuario_id?: string | null;
   /** Texto libre interno (no es el timeline de crm_notas). */
   observaciones?:       string | null;
   notas:                 Nota[];

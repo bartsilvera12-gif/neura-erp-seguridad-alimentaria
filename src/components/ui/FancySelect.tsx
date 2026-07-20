@@ -27,6 +27,8 @@ export type FancySelectProps = {
   size?: "sm" | "md";
   disabled?: boolean;
   openDirection?: "auto" | "up" | "down";
+  /** Estilos inline del trigger. Se usa para tenir el borde segun la etapa del CRM. */
+  triggerStyle?: React.CSSProperties;
 };
 
 const TRIGGER_BASE =
@@ -52,6 +54,7 @@ export function FancySelect({
   size = "md",
   disabled = false,
   openDirection = "auto",
+  triggerStyle,
 }: FancySelectProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -205,6 +208,7 @@ export function FancySelect({
         disabled={disabled}
         onClick={toggleMenu}
         onKeyDown={onKeyDown}
+        style={triggerStyle}
         className={`${TRIGGER_BASE} ${sizeClasses} ${
           open ? "border-[#4FAEB2] ring-2 ring-[#4FAEB2]/20" : ""
         }`}

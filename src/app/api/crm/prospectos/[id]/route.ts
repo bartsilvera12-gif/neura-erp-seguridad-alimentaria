@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProspectoForEmpresa } from "@/lib/crm/storage";
+import { resolveCrmScope, puedeAccederProspecto } from "@/lib/crm/server/crm-scope";
 import { getTenantSupabaseFromAuth } from "@/lib/supabase/tenant-api";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
@@ -32,6 +33,11 @@ export async function GET(
       return NextResponse.json(errorResponse("id es obligatorio"), { status: 400 });
     }
 
+    const scope = await resolveCrmScope(request);
+    if (!scope) {
+      return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
+    }
+
     const dataSchema = await fetchDataSchemaForEmpresaId(ctx.auth.empresa_id);
     const pool = getChatPostgresPool();
     if (pool && isLikelyUnexposedTenantChatSchema(dataSchema)) {
@@ -46,11 +52,19 @@ export async function GET(
       if (!prospectoPg) {
         return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
       }
+      // 404 y no 403 a proposito: a un comercial no se le confirma siquiera que
+      // el lead ajeno exista.
+      if (!puedeAccederProspecto(prospectoPg, scope)) {
+        return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
+      }
       return NextResponse.json(successResponse(prospectoPg));
     }
 
     const prospecto = await getProspectoForEmpresa(ctx.supabase, ctx.auth.empresa_id, id);
     if (!prospecto) {
+      return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
+    }
+    if (!puedeAccederProspecto(prospecto, scope)) {
       return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
     }
     return NextResponse.json(successResponse(prospecto));
@@ -78,6 +92,11 @@ export async function PATCH(
     const empresaId = ctx.auth.empresa_id;
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
 
+    const scope = await resolveCrmScope(request);
+    if (!scope) {
+      return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
+    }
+
     const dataSchema = await fetchDataSchemaForEmpresaId(empresaId);
     const pool = getChatPostgresPool();
     const usePg = Boolean(pool && isLikelyUnexposedTenantChatSchema(dataSchema));
@@ -86,6 +105,12 @@ export async function PATCH(
       const exists = await prospectoExistsForEmpresaPg(pool, dataSchema, empresaId, id);
       if (!exists) {
         return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
+      }
+      if (!scope.verTodos) {
+        const actual = await getProspectoForEmpresaPg(pool, dataSchema, empresaId, id);
+        if (!actual || !puedeAccederProspecto(actual, scope)) {
+          return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
+        }
       }
 
       const patch: Record<string, unknown> = {};
@@ -202,6 +227,15 @@ export async function PATCH(
 
     patch.fecha_actualizacion = new Date().toISOString();
 
+    // Mismo guard que en la rama Postgres: sin esto, un comercial podria
+    // editar un lead ajeno via PostgREST aunque no pueda listarlo.
+    if (!scope.verTodos) {
+      const actual = await getProspectoForEmpresa(ctx.supabase, empresaId, id);
+      if (!actual || !puedeAccederProspecto(actual, scope)) {
+        return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
+      }
+    }
+
     if (Object.keys(patch).length <= 1) {
       const p = await getProspectoForEmpresa(ctx.supabase, empresaId, id);
       return NextResponse.json(successResponse(p));
@@ -243,8 +277,25 @@ export async function DELETE(
     }
     const { id } = await params;
 
+    const scope = await resolveCrmScope(request);
+    if (!scope) {
+      return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
+    }
+
     const dataSchema = await fetchDataSchemaForEmpresaId(ctx.auth.empresa_id);
     const pool = getChatPostgresPool();
+
+    // Un comercial solo puede borrar lo propio. Se verifica ANTES de borrar,
+    // leyendo el registro: el DELETE por si solo no distingue de quien es.
+    if (!scope.verTodos) {
+      const actual = pool && isLikelyUnexposedTenantChatSchema(dataSchema)
+        ? await getProspectoForEmpresaPg(pool, dataSchema, ctx.auth.empresa_id, id)
+        : await getProspectoForEmpresa(ctx.supabase, ctx.auth.empresa_id, id);
+      if (!actual || !puedeAccederProspecto(actual, scope)) {
+        return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
+      }
+    }
+
     if (pool && isLikelyUnexposedTenantChatSchema(dataSchema)) {
       const deleted = await deleteProspectoForEmpresaPg(pool, dataSchema, ctx.auth.empresa_id, id);
       if (!deleted) {

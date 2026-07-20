@@ -13,6 +13,7 @@ import {
   getProspectoForEmpresaPg,
   logCrmFunnelProspectStageMatch,
 } from "@/lib/crm/crm-prospectos-pg";
+import { resolveCrmScope, aplicarScopeCrm } from "@/lib/crm/server/crm-scope";
 
 /**
  * GET /api/crm/prospectos
@@ -24,6 +25,13 @@ export async function GET(request: NextRequest) {
     if (!ctx) {
       return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
     }
+    // Scope por responsable: un comercial no debe poder listar leads ajenos
+    // manipulando la API. El ERP de origen no tenia este control.
+    const scope = await resolveCrmScope(request);
+    if (!scope) {
+      return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
+    }
+
     const dataSchema = await fetchDataSchemaForEmpresaId(ctx.auth.empresa_id);
     const pool = getChatPostgresPool();
     if (pool && isLikelyUnexposedTenantChatSchema(dataSchema)) {
@@ -42,7 +50,7 @@ export async function GET(request: NextRequest) {
           modo: "postgres_directo",
           count: pgList.length,
         });
-        return NextResponse.json(successResponse(pgList));
+        return NextResponse.json(successResponse(aplicarScopeCrm(pgList, scope)));
       }
       return NextResponse.json(
         errorResponse("No se pudieron listar prospectos vía Postgres (tenant no expuesto)"),
@@ -58,7 +66,7 @@ export async function GET(request: NextRequest) {
       modo: "postgrest",
       count: items.length,
     });
-    return NextResponse.json(successResponse(items));
+    return NextResponse.json(successResponse(aplicarScopeCrm(items, scope)));
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Error";
     return NextResponse.json(errorResponse(msg), { status: 500 });
@@ -119,6 +127,13 @@ export async function POST(request: NextRequest) {
       origen_creacion: "manual",
       origen_detalle: null,
       responsable: typeof body.responsable === "string" && body.responsable.trim() ? body.responsable.trim() : null,
+      // Si no se asigna a nadie explicitamente, el lead queda a nombre de quien
+      // lo carga. Sin esto un comercial crearia leads que su propio scope no le
+      // deja volver a ver.
+      responsable_usuario_id:
+        typeof body.responsable_usuario_id === "string" && body.responsable_usuario_id.trim()
+          ? body.responsable_usuario_id.trim()
+          : ctx.auth.usuarioCatalogId ?? null,
       observaciones: typeof body.observaciones === "string" && body.observaciones.trim() ? body.observaciones.trim() : null,
     };
 
@@ -138,6 +153,7 @@ export async function POST(request: NextRequest) {
         origen_creacion: insert.origen_creacion,
         origen_detalle: insert.origen_detalle,
         responsable: insert.responsable,
+        responsable_usuario_id: insert.responsable_usuario_id,
         observaciones: insert.observaciones,
       });
       if (!created?.id) {

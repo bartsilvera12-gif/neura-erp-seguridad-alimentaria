@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantSupabaseFromAuth } from "@/lib/supabase/tenant-api";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
+import { resolveCrmScope, puedeAccederProspecto } from "@/lib/crm/server/crm-scope";
 
 interface NotaRow {
   id: string;
@@ -34,7 +35,7 @@ export async function POST(
 
     const { data: pros, error: errP } = await ctx.supabase
       .from("crm_prospectos")
-      .select("id")
+      .select("id, responsable_usuario_id")
       .eq("id", prospectoId)
       .eq("empresa_id", empresaId)
       .maybeSingle();
@@ -43,6 +44,15 @@ export async function POST(
       return NextResponse.json(errorResponse(errP.message), { status: 400 });
     }
     if (!pros) {
+      return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
+    }
+
+    // Escribir una nota es tocar el lead: mismo scope que ver o editar.
+    const scope = await resolveCrmScope(request);
+    if (!scope) {
+      return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
+    }
+    if (!puedeAccederProspecto(pros as { responsable_usuario_id?: string | null }, scope)) {
       return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
     }
 

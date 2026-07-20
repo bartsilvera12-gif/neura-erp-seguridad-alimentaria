@@ -100,7 +100,10 @@ const COLS = `
   tipo_pago, plazo_dias, nro_timbrado, numero_control, estado, fecha,
   fecha_factura, metodo_pago,
   comprobante_url, comprobante_storage_path, comprobante_nombre, comprobante_mime_type,
-  created_at, updated_at, created_by, usuario_nombre
+  created_at, updated_at, created_by, usuario_nombre,
+  cantidad_recibida, estado_recepcion, fecha_estimada_llegada,
+  fecha_ultima_recepcion, recepcion_completada_at,
+  cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual
 `;
 
 export interface InsertCompraInput {
@@ -175,7 +178,18 @@ export interface CompraHeaderInput {
   tipo_cambio: number;
   tipo_pago: string;
   plazo_dias: number | null;
-  nro_timbrado: string;
+  /**
+   * Timbrado del proveedor. Puede venir vacío: una ORDEN se crea antes de tener
+   * la factura. Se completa después (la columna pasó a NULLABLE en la migración
+   * 2026-07-16).
+   */
+  nro_timbrado: string | null;
+  /** Fecha estimada de llegada general de la orden (YYYY-MM-DD). */
+  fecha_estimada_llegada?: string | null;
+  /** Snapshot de la cotización aplicada (solo para moneda extranjera). */
+  cotizacion_fuente?: string | null;
+  cotizacion_fecha?: string | null;
+  cotizacion_es_manual?: boolean;
   /** Fecha del comprobante fiscal del proveedor (YYYY-MM-DD). null si no se cargó. */
   fecha_factura: string | null;
   /** Método: 'efectivo' | 'transferencia' | 'tarjeta'. null si no se especificó. */
@@ -201,6 +215,8 @@ export interface CompraItemInput {
   total: number;
   precio_venta: number;
   margen_venta: number | null;
+  /** Fecha estimada propia de este producto; pisa la general de la cabecera. */
+  fecha_estimada_llegada?: string | null;
 }
 
 export interface ComprasMultiResult {
@@ -228,8 +244,8 @@ export async function insertComprasConImpacto(
     throw new Error("La compra no tiene productos.");
   }
   const tC = quoteSchemaTable(schema, "compras");
-  const tM = quoteSchemaTable(schema, "movimientos_inventario");
-  const tP = quoteSchemaTable(schema, "productos");
+  // Nota: crear la ORDEN ya no impacta inventario — el movimiento y el stock
+  // viven en recepciones-pg.ts, por cada entrega recibida.
   const tPP = quoteSchemaTable(schema, "proveedor_productos");
 
   const client = await pool().connect();
@@ -248,7 +264,9 @@ export async function insertComprasConImpacto(
            tipo_pago, plazo_dias, nro_timbrado, numero_control, estado, fecha,
            fecha_factura, metodo_pago,
            comprobante_url, comprobante_storage_path, comprobante_nombre, comprobante_mime_type,
-           created_by, usuario_nombre
+           created_by, usuario_nombre,
+           cantidad_recibida, estado_recepcion, fecha_estimada_llegada,
+           cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual
          ) VALUES (
            $1::uuid, $2::uuid, $3, $4::uuid, $5,
            $6::numeric, $7, $8::numeric, $9::numeric, $10::numeric,
@@ -256,7 +274,9 @@ export async function insertComprasConImpacto(
            $17, $18::integer, $19, $20, 'registrada', now(),
            $21::date, $22,
            $23, $24, $25, $26,
-           $27::uuid, $28
+           $27::uuid, $28,
+           0, 'pendiente', $29::date,
+           $30, $31::timestamptz, $32::boolean
          )
          RETURNING ${COLS}`,
         [
@@ -270,48 +290,29 @@ export async function insertComprasConImpacto(
           header.comprobante_url, header.comprobante_storage_path,
           header.comprobante_nombre, header.comprobante_mime_type,
           header.created_by, header.usuario_nombre,
+          // Fecha estimada: la de la línea pisa a la general de la cabecera.
+          it.fecha_estimada_llegada ?? header.fecha_estimada_llegada ?? null,
+          header.cotizacion_fuente ?? null,
+          header.cotizacion_fecha ?? null,
+          header.cotizacion_es_manual ?? false,
         ]
       );
       insertedRows.push(compraRows[0]);
 
-      // Movimiento ENTRADA por línea (best-effort).
-      try {
-        await client.query(
-          `INSERT INTO ${tM} (
-             empresa_id, producto_id, producto_nombre, producto_sku,
-             tipo, cantidad, costo_unitario, origen, referencia, fecha,
-             created_by, usuario_nombre
-           )
-           SELECT $1::uuid, $2::uuid, $3, COALESCE(p.sku, ''),
-                  'ENTRADA', $4::numeric, $5::numeric, 'compra', $6, now(),
-                  $7::uuid, $8
-           FROM ${tP} p WHERE p.id = $2::uuid`,
-          [empresaId, it.producto_id, it.producto_nombre, it.cantidad,
-           it.costo_unitario, numero, header.created_by, header.usuario_nombre]
-        );
-      } catch (movErr) {
-        const msg = movErr instanceof Error ? movErr.message : String(movErr);
-        console.error("[compras-pg] movimiento ENTRADA fallo (multi)", {
-          schema, empresaId, numero, producto: it.producto_id, message: msg,
-        });
-        warnings.push(it.producto_nombre);
-      }
+      // ⚠️ Crear la ORDEN ya NO impacta inventario.
+      //
+      // Antes acá se insertaba el movimiento ENTRADA y se sumaba stock, o sea
+      // "comprar == recibir". Con recepciones parciales eso se separa: la orden
+      // nace en `estado_recepcion='pendiente'` con `cantidad_recibida=0`, y el
+      // stock/costo/movimiento los mueve `registrarRecepcion()`
+      // (src/lib/compras/server/recepciones-pg.ts), una vez por cada entrega.
+      //
+      // Las compras HISTÓRICAS ya impactaron stock y quedaron marcadas como
+      // 'completa' en el backfill de la migración 2026-07-16, así que no se
+      // vuelven a contar.
 
-      // Actualizar producto: stock + costo_promedio siempre.
-      // precio_venta SOLO se actualiza si la compra trae un precio > 0 (productos
-      // vendibles). Para materia prima / insumos sin precio (0 o vacío) mantenemos
-      // el precio actual: nunca lo pisamos con 0 ni con un valor inventado.
-      await client.query(
-        `UPDATE ${tP}
-            SET stock_actual = stock_actual + $1::numeric,
-                costo_promedio = $2::numeric,
-                precio_venta = CASE WHEN $3::numeric > 0 THEN $3::numeric ELSE precio_venta END,
-                updated_at = now()
-          WHERE id = $4::uuid AND empresa_id = $5::uuid`,
-        [it.cantidad, it.costo_unitario, it.precio_venta, it.producto_id, empresaId]
-      );
-
-      // Mantener relación producto↔proveedor (costo_habitual). No pisa marca.
+      // La relación producto↔proveedor sí se registra al ordenar (es un dato
+      // comercial, no de inventario). No pisa marca.
       await upsertProveedorProducto(
         client, tPP, empresaId, it.producto_id, header.proveedor_id, it.costo_unitario
       );

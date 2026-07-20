@@ -40,8 +40,9 @@ export async function POST(request: NextRequest) {
     const req = (k: string) => body[k] != null && String(body[k]).trim() !== "";
 
     if (!req("proveedor_id")) return NextResponse.json(errorResponse("Falta el proveedor."), { status: 400 });
-    if (!req("nro_timbrado"))
-      return NextResponse.json(errorResponse("Falta el N° de timbrado."), { status: 400 });
+    // El timbrado YA NO es obligatorio: una ORDEN de compra se emite antes de
+    // tener la factura del proveedor. Se completa al recibirla. Las compras
+    // históricas conservan el suyo (la columna solo pasó a aceptar NULL).
 
     const ivaOk = (v: unknown) => (["exenta", "0", "5", "10"].includes(String(v)) ? (String(v) === "0" ? "exenta" : String(v)) : "10");
 
@@ -73,9 +74,17 @@ export async function POST(request: NextRequest) {
       tipo_pago: body.tipo_pago === "credito" ? "credito" : "contado",
       plazo_dias: body.plazo_dias != null && String(body.plazo_dias).trim() !== ""
         ? parseInt(String(body.plazo_dias), 10) || null : null,
-      nro_timbrado: String(body.nro_timbrado).trim().toUpperCase(),
+      nro_timbrado: req("nro_timbrado") ? String(body.nro_timbrado).trim().toUpperCase() : null,
       fecha_factura: fechaFactura,
       metodo_pago: metodoPago,
+      fecha_estimada_llegada: /^\d{4}-\d{2}-\d{2}$/.test(String(body.fecha_estimada_llegada ?? ""))
+        ? String(body.fecha_estimada_llegada)
+        : null,
+      cotizacion_fuente: body.cotizacion_fuente != null && String(body.cotizacion_fuente).trim() !== ""
+        ? String(body.cotizacion_fuente) : null,
+      cotizacion_fecha: body.cotizacion_fecha != null && String(body.cotizacion_fecha).trim() !== ""
+        ? String(body.cotizacion_fecha) : null,
+      cotizacion_es_manual: body.cotizacion_es_manual === true,
       comprobante_url: body.comprobante_url != null && String(body.comprobante_url).trim() !== "" ? String(body.comprobante_url) : null,
       comprobante_storage_path: body.comprobante_storage_path != null && String(body.comprobante_storage_path).trim() !== "" ? String(body.comprobante_storage_path) : null,
       comprobante_nombre: body.comprobante_nombre != null && String(body.comprobante_nombre).trim() !== "" ? String(body.comprobante_nombre) : null,
@@ -110,6 +119,9 @@ export async function POST(request: NextRequest) {
         total: Number(it.total) || 0,
         precio_venta: Number(it.precio_venta) || 0,
         margen_venta: it.margen_venta != null ? Number(it.margen_venta) : null,
+        fecha_estimada_llegada: /^\d{4}-\d{2}-\d{2}$/.test(String(it.fecha_estimada_llegada ?? ""))
+          ? String(it.fecha_estimada_llegada)
+          : null,
       });
     }
 

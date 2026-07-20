@@ -52,4 +52,20 @@ export interface Compra {
   estado?: "registrada" | "pendiente" | "pagada" | "anulada";
   anulada_at?: string | null;
   anulacion_motivo?: string | null;
+
+  // ── Recepción de mercadería ────────────────────────────────────────────────
+  // Independiente de `estado` (que es financiero): una orden puede estar pagada
+  // y todavía no recibida, o recibida y pendiente de pago.
+  /** Unidades efectivamente recibidas de esta línea. */
+  cantidad_recibida?: number;
+  estado_recepcion?: "pendiente" | "parcial" | "completa" | "cancelada";
+  /** Llegada estimada de esta línea (pisa la general de la orden). */
+  fecha_estimada_llegada?: string | null;
+  fecha_ultima_recepcion?: string | null;
+  recepcion_completada_at?: string | null;
+
+  // ── Snapshot de cotización (solo compras en moneda extranjera) ─────────────
+  cotizacion_fuente?: string | null;
+  cotizacion_fecha?: string | null;
+  cotizacion_es_manual?: boolean;
 }

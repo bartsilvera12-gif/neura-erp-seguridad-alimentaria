@@ -31,18 +31,26 @@ function asItems(body: unknown): CreateVentaItemInput[] | null {
     const tp = r.tipo_precio;
     const tipoPrecio: "minorista" | "mayorista" | "distribuidor" | "costo" =
       tp === "mayorista" || tp === "distribuidor" || tp === "costo" ? tp : "minorista";
+    // Muestra / regalo: salida sin cargo. Se fuerzan los importes a 0 en el
+    // servidor — no se confía en que el cliente los haya mandado en 0.
+    const ts = r.tipo_salida;
+    const tipoSalida: "venta" | "muestra" | "regalo" =
+      ts === "muestra" || ts === "regalo" ? ts : "venta";
+    const sinCargo = tipoSalida !== "venta";
     out.push({
       producto_id: String(r.producto_id ?? ""),
       producto_nombre: String(r.producto_nombre ?? ""),
       sku: String(r.sku ?? ""),
       cantidad: Number(r.cantidad),
-      precio_venta_original: Number(r.precio_venta_original),
-      precio_venta: Number(r.precio_venta),
+      precio_venta_original: sinCargo ? 0 : Number(r.precio_venta_original),
+      precio_venta: sinCargo ? 0 : Number(r.precio_venta),
       tipo_iva: tipoIva,
       tipo_precio: tipoPrecio,
-      subtotal: Number(r.subtotal),
-      monto_iva: Number(r.monto_iva),
-      total_linea: Number(r.total_linea),
+      subtotal: sinCargo ? 0 : Number(r.subtotal),
+      monto_iva: sinCargo ? 0 : Number(r.monto_iva),
+      total_linea: sinCargo ? 0 : Number(r.total_linea),
+      tipo_salida: tipoSalida,
+      motivo_salida: sinCargo ? String(r.motivo_salida ?? "").trim().slice(0, 300) : null,
     });
   }
   // NaN/Infinity bypasean el chequeo de coherencia de totales en
@@ -61,6 +69,15 @@ function asItems(body: unknown): CreateVentaItemInput[] | null {
         !Number.isFinite(i.total_linea)
     )
   ) {
+    return null;
+  }
+  // Una línea COBRADA no puede ir a precio 0: eso evita el cero puesto por
+  // accidente. Para entregar sin cargo hay que marcarla muestra o regalo.
+  if (out.some((i) => i.tipo_salida === "venta" && !(i.precio_venta > 0))) {
+    return null;
+  }
+  // Muestra/regalo exigen un motivo: sin trazabilidad no se regala stock.
+  if (out.some((i) => i.tipo_salida !== "venta" && !i.motivo_salida)) {
     return null;
   }
   return out;

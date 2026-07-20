@@ -38,6 +38,10 @@ export interface CreateVentaItemInput {
   subtotal: number;
   monto_iva: number;
   total_linea: number;
+  /** venta (cobrada) | muestra | regalo. Las dos últimas salen a precio 0. */
+  tipo_salida?: "venta" | "muestra" | "regalo";
+  /** Motivo de la entrega sin cargo (obligatorio en muestra/regalo). */
+  motivo_salida?: string | null;
 }
 
 export interface CreateVentaPedidoCocinaInput {
@@ -481,21 +485,39 @@ export async function createVentaTransaccionalPg(
 
   try {
     // 6) Insertar items (bulk)
-    const itemsRows = items.map((line) => ({
-      empresa_id: params.empresaId,
-      venta_id: ventaId,
-      producto_id: line.producto_id,
-      producto_nombre: line.producto_nombre,
-      sku: line.sku,
-      cantidad: line.cantidad,
-      precio_venta_original: line.precio_venta_original,
-      precio_venta: line.precio_venta,
-      tipo_iva: line.tipo_iva,
-      tipo_precio: line.tipo_precio,
-      subtotal: line.subtotal,
-      monto_iva: line.monto_iva,
-      total_linea: line.total_linea,
-    }));
+    const itemsRows = items.map((line) => {
+      // Snapshot de costo EN PYG al momento de la venta: los reportes históricos
+      // no deben recalcularse con el costo actual del producto. `stockMap` ya
+      // trae el costo_promedio leído al inicio de esta misma operación.
+      const costoUnitario = stockMap.get(line.producto_id)?.costo ?? 0;
+      const costoTotal = costoUnitario * line.cantidad;
+      // Ganancia contra la BASE IMPONIBLE (subtotal), no contra total_linea:
+      // el precio lleva IVA incluido, y computarlo contra el total inflaría el
+      // margen ~10%. En muestras/regalos el ingreso es 0 → ganancia negativa
+      // por el costo entregado.
+      const ganancia = (Number(line.subtotal) || 0) - costoTotal;
+      const tipoSalida = line.tipo_salida ?? "venta";
+      return {
+        empresa_id: params.empresaId,
+        venta_id: ventaId,
+        producto_id: line.producto_id,
+        producto_nombre: line.producto_nombre,
+        sku: line.sku,
+        cantidad: line.cantidad,
+        precio_venta_original: line.precio_venta_original,
+        precio_venta: line.precio_venta,
+        tipo_iva: line.tipo_iva,
+        tipo_precio: line.tipo_precio,
+        subtotal: line.subtotal,
+        monto_iva: line.monto_iva,
+        total_linea: line.total_linea,
+        tipo_salida: tipoSalida,
+        motivo_salida: tipoSalida === "venta" ? null : (line.motivo_salida ?? null),
+        costo_unitario_snapshot_pyg: costoUnitario,
+        costo_total_snapshot_pyg: costoTotal,
+        ganancia_pyg: ganancia,
+      };
+    });
     const insItems = await sb.from("ventas_items").insert(itemsRows);
     if (insItems.error) throw new Error(insItems.error.message);
 
@@ -531,6 +553,10 @@ export async function createVentaTransaccionalPg(
         venta_id: ventaId,
         created_by: params.createdBy ?? null,
         usuario_nombre: params.usuarioNombre ?? null,
+        // Trazabilidad de muestras/regalos también en el movimiento: permite
+        // auditar la salida sin pasar por ventas_items.
+        tipo_salida: line.tipo_salida ?? "venta",
+        motivo_salida: (line.tipo_salida ?? "venta") === "venta" ? null : (line.motivo_salida ?? null),
       });
       if (mov.error) throw new Error(mov.error.message);
     }
@@ -652,8 +678,13 @@ export async function createVentaTransaccionalPg(
     // 9) Cuenta por cobrar (solo CRÉDITO con cliente). El saldo inicial = total de la venta;
     //    estado 'pendiente'. NO afecta stock ni movimientos: es cobranza. Un índice único
     //    sobre venta_id impide CxC duplicada si la venta se reintentara.
+    // Operación 100% sin cargo (todo muestra/regalo): no hay nada que cobrar,
+    // así que no se crea CxC aunque el tipo sea CRÉDITO.
+    const totalCobrable = calc.total;
+    const todoSinCargo = items.every((l) => (l.tipo_salida ?? "venta") !== "venta");
+
     let cuentaPorCobrarId: string | null = null;
-    if (params.tipoVenta === "CREDITO" && params.clienteId) {
+    if (params.tipoVenta === "CREDITO" && params.clienteId && !todoSinCargo && totalCobrable > 0) {
       const fechaEmision = fechaIso.slice(0, 10);
       let fechaVencimiento: string | null = null;
       if (params.fechaVencimiento) {
@@ -697,7 +728,11 @@ export async function createVentaTransaccionalPg(
     let facturaId: string | null = null;
     let numeroFactura: string | null = null;
     let facturaWarning: string | null = null;
-    const emitirFactura = params.emitirFactura !== false;
+    // Una operación 100% sin cargo tampoco genera factura: no habría ni una
+    // línea facturable y el documento saldría vacío / inválido para SIFEN.
+    // La entrega igual queda trazada (ventas_items + movimientos) y se puede
+    // imprimir ticket o nota de remisión.
+    const emitirFactura = params.emitirFactura !== false && !todoSinCargo && totalCobrable > 0;
     if (emitirFactura) try {
       // 1) Snapshot de razón social / RUC — si hay cliente_id usamos su ficha
       //    (nombre_facturacion tiene prioridad sobre razón social/nombre_contacto);
@@ -763,19 +798,29 @@ export async function createVentaTransaccionalPg(
       facturaId = String((insFac.data as { id: string }).id);
 
       // 4) factura_items — una fila por línea con tipo_iva (para desglose SIFEN).
-      const itemsFacRows = items.map((line) => ({
-        empresa_id: params.empresaId,
-        factura_id: facturaId,
-        descripcion: line.producto_nombre,
-        cantidad: line.cantidad,
-        precio_unitario: line.precio_venta,
-        subtotal: line.subtotal,
-        iva: line.monto_iva,
-        tipo_iva: line.tipo_iva,
-        total: line.total_linea,
-      }));
-      const insFacItems = await sb.from("factura_items").insert(itemsFacRows);
-      if (insFacItems.error) throw new Error(insFacItems.error.message);
+      //
+      // ⚠️ Se EXCLUYEN las líneas sin cargo (muestra/regalo). El XSD de SIFEN no
+      // admite `dPUniProSer`/`dTotOpeItem` en 0, y el builder actual degrada esas
+      // líneas a EXENTA, lo que altera `dSubExe` y termina en rechazo de la SET
+      // después de firmar y enviar. La salida sin cargo igual queda registrada
+      // en `ventas_items` + `movimientos_inventario` (descuenta stock y guarda
+      // el costo), y se documenta en las observaciones de la factura.
+      const itemsFacturables = items.filter((l) => (l.tipo_salida ?? "venta") === "venta");
+      if (itemsFacturables.length > 0) {
+        const itemsFacRows = itemsFacturables.map((line) => ({
+          empresa_id: params.empresaId,
+          factura_id: facturaId,
+          descripcion: line.producto_nombre,
+          cantidad: line.cantidad,
+          precio_unitario: line.precio_venta,
+          subtotal: line.subtotal,
+          iva: line.monto_iva,
+          tipo_iva: line.tipo_iva,
+          total: line.total_linea,
+        }));
+        const insFacItems = await sb.from("factura_items").insert(itemsFacRows);
+        if (insFacItems.error) throw new Error(insFacItems.error.message);
+      }
 
       // 5) Link venta → factura.
       const linkUpd = await sb

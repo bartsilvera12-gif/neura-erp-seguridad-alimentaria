@@ -11,7 +11,8 @@ import { saveVenta, type FaltanteStock } from "@/lib/ventas/storage";
 import { getProductos } from "@/lib/inventario/storage";
 import { productoMatchesQuery } from "@/lib/productos/token-search";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
-import type { TipoIvaVenta, TipoVenta, MonedaVenta, LineaVenta, MetodoPago, TipoPrecioVenta } from "@/lib/ventas/types";
+import type { TipoIvaVenta, TipoVenta, MonedaVenta, LineaVenta, MetodoPago, TipoPrecioVenta, TipoSalidaVenta } from "@/lib/ventas/types";
+import { esSalidaSinCargo } from "@/lib/ventas/types";
 import type { Producto } from "@/lib/inventario/types";
 import type { MetodoValuacion } from "@/lib/inventario/types";
 
@@ -492,7 +493,21 @@ export default function NuevaVentaPage() {
   // requiere receptor) o si es crédito (necesita CxC). Para "Solo ticket" a
   // consumidor final, la venta puede ir sin cliente.
   const clienteObligatorio = tipoDocumento === "factura" || tipoVenta === "CREDITO";
-  const ventaValida   = items.length > 0 && creditoValido && (!clienteObligatorio || !!clienteId);
+  // Muestra/regalo exigen motivo, y una línea cobrada no puede ir a precio 0
+  // (el servidor lo rechaza igual; acá se evita el viaje y se avisa antes).
+  const lineasSinMotivo = items.filter(
+    (i) => esSalidaSinCargo(i.tipo_salida) && !(i.motivo_salida ?? "").trim()
+  ).length;
+  const lineasCobradasSinPrecio = items.filter(
+    (i) => !esSalidaSinCargo(i.tipo_salida) && !(i.precio_venta > 0)
+  ).length;
+
+  const ventaValida =
+    items.length > 0 &&
+    creditoValido &&
+    (!clienteObligatorio || !!clienteId) &&
+    lineasSinMotivo === 0 &&
+    lineasCobradasSinPrecio === 0;
 
   // Cliente (opcional) — selección + filtrado del buscador.
   const clienteSel = clientes.find((c) => c.id === clienteId) ?? null;
@@ -538,6 +553,31 @@ export default function NuevaVentaPage() {
 
   // ── Autocomplete rápido + edición inline de la tabla ───────────────────────
   /** Recalcula subtotal/IVA/total de una línea (IVA incluido, igual que calcIva). */
+  /**
+   * Cambia la naturaleza de la línea (venta / muestra / regalo).
+   * Muestra y regalo fuerzan precio 0: el importe deja de ser editable mientras
+   * la línea siga sin cargo. Al volver a "venta" se restaura el precio de lista.
+   */
+  function changeTipoSalidaItem(idx: number, tipo: TipoSalidaVenta) {
+    setItems((prev) =>
+      prev.map((it, i) => {
+        if (i !== idx) return it;
+        if (esSalidaSinCargo(tipo)) {
+          return recomputeLinea({ ...it, tipo_salida: tipo, precio_venta: 0, precio_venta_original: 0 });
+        }
+        const prod = productos.find((p) => p.id === it.producto_id);
+        const precio = prod ? precioPorTipo(prod, it.tipo_precio ?? "minorista") : it.precio_venta;
+        return recomputeLinea({
+          ...it,
+          tipo_salida: "venta",
+          motivo_salida: null,
+          precio_venta: precio,
+          precio_venta_original: precio,
+        });
+      })
+    );
+  }
+
   function recomputeLinea(l: LineaVenta): LineaVenta {
     const total_linea = l.cantidad > 0 && l.precio_venta > 0 ? l.cantidad * l.precio_venta : 0;
     const monto_iva = calcIva(l.tipo_iva, total_linea);
@@ -630,6 +670,23 @@ export default function NuevaVentaPage() {
           ? "Para emitir factura electrónica"
           : "Para venta a crédito";
       setErrorVenta(`${motivo} tenés que elegir un cliente. Podés cargarlo rápido desde el buscador de arriba.`);
+      return;
+    }
+    // Salidas sin cargo: el motivo es obligatorio (queda en el reporte de
+    // muestras y regalos y en el movimiento de inventario).
+    if (lineasSinMotivo > 0) {
+      isSubmittingRef.current = false;
+      setErrorVenta(
+        `Indicá el motivo en ${lineasSinMotivo === 1 ? "la línea marcada" : `las ${lineasSinMotivo} líneas marcadas`} como muestra o regalo.`
+      );
+      return;
+    }
+    // Una línea cobrada nunca puede salir en 0: para eso está muestra/regalo.
+    if (lineasCobradasSinPrecio > 0) {
+      isSubmittingRef.current = false;
+      setErrorVenta(
+        "Hay líneas de venta con precio 0. Poné un precio o marcalas como muestra o regalo."
+      );
       return;
     }
     setGuardando(true);
@@ -971,6 +1028,7 @@ export default function NuevaVentaPage() {
                     <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold uppercase tracking-wide text-slate-500">
                       <th className="px-3 py-3">Producto</th>
                       <th className="hidden px-3 py-3 md:table-cell">Precio</th>
+                      <th className="hidden px-3 py-3 md:table-cell">Salida</th>
                       <th className="hidden px-3 py-3 text-center md:table-cell">IVA</th>
                       <th className="px-3 py-3 text-center">Cant.</th>
                       <th className="px-3 py-3 text-right">Precio unit.</th>
@@ -1011,6 +1069,42 @@ export default function NuevaVentaPage() {
                               })}
                             </div>
                           </td>
+                          {/* Naturaleza de la salida: venta / muestra / regalo */}
+                          <td className="hidden px-3 py-2.5 md:table-cell">
+                            <div className="inline-flex overflow-hidden rounded-lg border border-slate-200">
+                              {([
+                                { v: "venta" as const, label: "Venta" },
+                                { v: "muestra" as const, label: "Muestra" },
+                                { v: "regalo" as const, label: "Regalo" },
+                              ]).map((op) => {
+                                const sel = (item.tipo_salida ?? "venta") === op.v;
+                                return (
+                                  <button key={op.v} type="button" onClick={() => changeTipoSalidaItem(idx, op.v)}
+                                    className={`px-2 py-1.5 text-[11px] font-semibold transition-colors ${
+                                      sel
+                                        ? op.v === "venta" ? "bg-[#4FAEB2] text-white" : "bg-amber-500 text-white"
+                                        : "bg-white text-slate-600 hover:bg-slate-100"
+                                    }`}>
+                                    {op.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {esSalidaSinCargo(item.tipo_salida) && (
+                              <input
+                                type="text"
+                                value={item.motivo_salida ?? ""}
+                                onChange={(e) => updateItemCampo(idx, { motivo_salida: e.target.value })}
+                                placeholder="Motivo (obligatorio)"
+                                className={`mt-1 h-7 w-40 rounded-md border px-2 text-[11px] outline-none ${
+                                  (item.motivo_salida ?? "").trim()
+                                    ? "border-slate-200"
+                                    : "border-amber-300 bg-amber-50"
+                                }`}
+                                aria-label={`Motivo de la salida sin cargo de ${item.producto_nombre}`}
+                              />
+                            )}
+                          </td>
                           {/* IVA */}
                           <td className="hidden px-3 py-2.5 md:table-cell">
                             <div className="inline-flex overflow-hidden rounded-lg border border-slate-200">
@@ -1043,7 +1137,13 @@ export default function NuevaVentaPage() {
                             <input
                               type="number" min={0} value={item.precio_venta}
                               onChange={(e) => updateItemCampo(idx, { precio_venta: Math.max(0, Number(e.target.value) || 0) })}
-                              className="h-8 w-28 rounded-md border border-slate-200 bg-white px-2 text-right text-sm tabular-nums"
+                              disabled={esSalidaSinCargo(item.tipo_salida)}
+                              title={esSalidaSinCargo(item.tipo_salida) ? "Muestra/regalo: el precio queda en 0" : undefined}
+                              className={`h-8 w-28 rounded-md border px-2 text-right text-sm tabular-nums ${
+                                esSalidaSinCargo(item.tipo_salida)
+                                  ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                                  : "border-slate-200 bg-white"
+                              }`}
                               aria-label={`Precio unitario de ${item.producto_nombre}`}
                             />
                           </td>

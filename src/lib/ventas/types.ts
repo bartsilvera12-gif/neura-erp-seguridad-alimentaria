@@ -21,6 +21,30 @@ export interface LineaVenta {
   subtotal:              number;  // precio_venta × cantidad
   monto_iva:             number;
   total_linea:           number;  // subtotal + monto_iva
+  /**
+   * Naturaleza de la salida:
+   *  - `venta`   → cobrada, exige precio > 0.
+   *  - `muestra` / `regalo` → precio 0, IVA 0, total 0, PERO descuenta stock
+   *    igual que una venta y guarda el costo real para el reporte.
+   */
+  tipo_salida?:          TipoSalidaVenta;
+  /** Motivo/observación breve. Obligatorio en muestra y regalo. */
+  motivo_salida?:        string | null;
+  /** Costo promedio del producto en PYG al momento de la venta (snapshot). */
+  costo_unitario_snapshot_pyg?: number;
+  costo_total_snapshot_pyg?:    number;
+  /** subtotal − costo_total. Negativa en muestras/regalos. */
+  ganancia_pyg?:         number;
+}
+
+/** Tipo de salida de una línea de venta. */
+export type TipoSalidaVenta = "venta" | "muestra" | "regalo";
+
+export const TIPOS_SALIDA_SIN_CARGO: readonly TipoSalidaVenta[] = ["muestra", "regalo"];
+
+/** ¿La línea sale sin cobrar (muestra o regalo)? */
+export function esSalidaSinCargo(t: TipoSalidaVenta | undefined | null): boolean {
+  return t === "muestra" || t === "regalo";
 }
 
 /** Cabecera de venta: condiciones comerciales + totales consolidados. */

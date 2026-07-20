@@ -2,34 +2,25 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import {
+  Search, X, Plus, Package, Coins, AlertTriangle,
+  SlidersHorizontal, ChevronLeft, ChevronRight, PackageSearch, Pencil,
+} from "lucide-react";
 import { getProductos } from "@/lib/inventario/storage";
-import type { Producto, MetodoValuacion } from "@/lib/inventario/types";
+import type { Producto } from "@/lib/inventario/types";
 import ExportExcelButton from "@/components/ui/ExportExcelButton";
 import ImportExcelButton from "@/components/ui/ImportExcelButton";
 import EdgeScrollArea from "@/components/ui/EdgeScrollArea";
-import StatCard from "@/components/ui/StatCard";
 import { useIsAdmin } from "@/lib/auth/use-is-admin";
-
-const inputFilterClass =
-  "border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-[#0EA5E9] focus:outline-none";
-
-const metodoBadge: Record<MetodoValuacion, string> = {
-  CPP: "bg-blue-100 text-blue-700",
-  FIFO: "bg-green-100 text-green-700",
-  LIFO: "bg-purple-100 text-purple-700",
-};
+import { productoMatchesQuery } from "@/lib/productos/token-search";
 
 function formatGs(valor: number) {
-  return `Gs. ${valor.toLocaleString("es-PY")}`;
+  return `Gs. ${Math.round(valor).toLocaleString("es-PY")}`;
 }
 
-/** Cantidad de stock con hasta 3 decimales (los insumos pueden quedar fraccionados). */
+/** Stock con hasta 3 decimales (los insumos pueden quedar fraccionados). */
 function formatStock(valor: number) {
   return valor.toLocaleString("es-PY", { maximumFractionDigits: 3 });
-}
-
-function foldText(s: string): string {
-  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
 
 function calcularMargenVenta(costo: number, precio: number): number {
@@ -38,45 +29,65 @@ function calcularMargenVenta(costo: number, precio: number): number {
 }
 
 function margenColor(margen: number): string {
-  if (margen >= 40) return "text-green-600";
-  if (margen >= 20) return "text-yellow-600";
+  if (margen >= 40) return "text-emerald-600";
+  if (margen >= 20) return "text-amber-600";
   return "text-red-600";
 }
 
+/** Estado de stock: define el badge y el filtro rápido. */
+type EstadoStock = "sin_stock" | "bajo" | "ok";
+function estadoStockDe(p: Producto): EstadoStock {
+  if (p.stock_actual <= 0) return "sin_stock";
+  if (p.stock_actual <= p.stock_minimo) return "bajo";
+  return "ok";
+}
+const ESTADO_META: Record<EstadoStock, { label: string; badge: string; texto: string }> = {
+  sin_stock: { label: "Sin stock", badge: "bg-red-50 text-red-700 ring-1 ring-red-100", texto: "text-red-600" },
+  bajo: { label: "Stock bajo", badge: "bg-amber-50 text-amber-700 ring-1 ring-amber-100", texto: "text-amber-600" },
+  ok: { label: "Disponible", badge: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100", texto: "text-slate-700" },
+};
+
+const inputClass =
+  "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition-shadow duration-150 placeholder:text-slate-400 focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20";
+const btnPrimario =
+  "inline-flex items-center gap-2 rounded-lg bg-[#4FAEB2] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-[transform,background-color] duration-150 ease-out hover:bg-[#3F8E91] active:scale-[0.97]";
+const btnSecundario =
+  "inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition-[transform,background-color] duration-150 ease-out hover:bg-slate-50 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40";
+
 interface UbicacionMin { id: string; nombre: string; tipo: string }
+
+const POR_PAGINA_OPCIONES = [25, 50, 100] as const;
 
 export default function InventarioPage() {
   const { isAdmin } = useIsAdmin();
   const [todos, setTodos] = useState<Producto[]>([]);
   const [ubicaciones, setUbicaciones] = useState<UbicacionMin[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [cargando, setCargando] = useState(true);
 
-  // Filtros por columna
-  const [filtroPorNombre,  setFiltroPorNombre]  = useState("");
-  const [filtroPorSku,     setFiltroPorSku]     = useState("");
-  const [filtroPorCosto,   setFiltroPorCosto]   = useState("");
-  const [filtroPorPrecio,  setFiltroPorPrecio]  = useState("");
-  const [filtroValuacion,  setFiltroValuacion]  = useState<MetodoValuacion | "">("");
-  const [filtroUbicacion,  setFiltroUbicacion]  = useState<string>(""); // "", "__sin__" o id
-  const [filtroTipo,       setFiltroTipo]       = useState<"todos" | "vendibles" | "insumos" | "mixtos">("todos");
-  // Esta instancia solo comercializa productos de REVENTA: el tab queda fijo y
-  // la barra de pestañas (Reventa | Menú | Materia prima) no se renderiza.
-  // Para reactivarlos, volver a `useState` y restaurar la <nav> de tabs.
+  // ── Filtros ────────────────────────────────────────────────────────────────
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState<EstadoStock | "">("");
+  const [filtroUbicacion, setFiltroUbicacion] = useState("");   // "", "__sin__" o id
+  const [filtroPrecio, setFiltroPrecio] = useState<"" | "sin_precio" | "con_precio">("");
+  const [filtroBarras, setFiltroBarras] = useState<"" | "con" | "sin">("");
+  const [filtroMargen, setFiltroMargen] = useState<"" | "alto" | "medio" | "bajo">("");
+  const [verFiltros, setVerFiltros] = useState(false);
+  const [orden, setOrden] = useState<"nombre" | "stock_asc" | "valor_desc" | "margen_desc">("nombre");
+
+  // ── Paginado ───────────────────────────────────────────────────────────────
+  const [pagina, setPagina] = useState(1);
+  const [porPagina, setPorPagina] = useState<number>(25);
+
+  // Esta instancia solo comercializa productos de REVENTA (ver historial de git).
   const tab = "reventa" as "reventa" | "menu" | "materia";
-  const [cargandoLista,    setCargandoLista]     = useState(true);
-  const [soloStockBajo,    setSoloStockBajo]    = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    setCargandoLista(true);
+    setCargando(true);
     getProductos()
-      .then((data) => {
-        if (!cancelled) setTodos(data);
-      })
-      .finally(() => {
-        if (!cancelled) setCargandoLista(false);
-      });
-    // Ubicaciones para el filtro
+      .then((data) => { if (!cancelled) setTodos(data); })
+      .finally(() => { if (!cancelled) setCargando(false); });
     fetch("/api/inventario/ubicaciones", { credentials: "include", cache: "no-store" })
       .then((r) => r.json())
       .then((j) => {
@@ -87,137 +98,116 @@ export default function InventarioPage() {
     return () => { cancelled = true; };
   }, [refreshKey]);
 
-  // Map se reconstruia en cada render del componente (cualquier setState de
-  // filtro): O(N) basura por keystroke. useMemo lo cachea hasta que cambia ubicaciones.
   const ubicacionById = useMemo(
     () => new Map(ubicaciones.map((u) => [u.id, u])),
-    [ubicaciones],
+    [ubicaciones]
   );
 
-  // Lista filtrada: el filter recorre `todos` en cada keystroke de los filtros.
-  // Con catalogos de 500-5000 productos esto era visible (lag al tipear).
-  // useMemo solo recalcula cuando cambian las dependencias relevantes.
-  const productos = useMemo(() => todos.filter((p) => {
-    // Nombre — fold accents/diacritics ("atun" matchea "ATÚN"). También matchea
-    // por codigo_barras para poder buscar escaneando o pegando el número.
-    if (filtroPorNombre.trim() !== "") {
-      const q = foldText(filtroPorNombre.trim());
-      const nombreMatch = foldText(p.nombre).includes(q);
-      const barrasMatch =
-        typeof p.codigo_barras === "string" && p.codigo_barras.length > 0 &&
-        foldText(p.codigo_barras).includes(q);
-      if (!nombreMatch && !barrasMatch) return false;
-    }
+  /** Universo de la pestaña (hoy: solo reventa). Base de todos los filtros. */
+  const universo = useMemo(
+    () =>
+      todos.filter((p) => {
+        const esVendible = p.es_vendible !== false;
+        const esInsumo = p.es_insumo === true;
+        const controlaStock = p.controla_stock !== false;
+        if (tab === "reventa") return esVendible && controlaStock && !esInsumo;
+        if (tab === "menu") return esVendible && !controlaStock && !esInsumo;
+        return esInsumo;
+      }),
+    [todos, tab]
+  );
 
-    // SKU
-    if (filtroPorSku.trim() !== "" &&
-        !foldText(p.sku).includes(foldText(filtroPorSku.trim())))
-      return false;
+  const productos = useMemo(() => {
+    const lista = universo.filter((p) => {
+      // Buscador inteligente: cada palabra puede aparecer en cualquier campo y
+      // en cualquier orden, sin importar acentos ni mayúsculas.
+      // "boligrafo azul" encuentra "Bolígrafo detectable azul".
+      if (!productoMatchesQuery(busqueda, p.nombre, p.sku, p.codigo_barras)) return false;
 
-    // Costo promedio — acepta "35000" o "35.000"
-    if (filtroPorCosto.trim() !== "") {
-      const t = filtroPorCosto.trim();
-      const coincide =
-        String(p.costo_promedio).includes(t) ||
-        p.costo_promedio.toLocaleString("es-PY").includes(t);
-      if (!coincide) return false;
-    }
+      if (filtroEstado !== "" && estadoStockDe(p) !== filtroEstado) return false;
 
-    // Precio venta — acepta "75000" o "75.000"
-    if (filtroPorPrecio.trim() !== "") {
-      const t = filtroPorPrecio.trim();
-      const coincide =
-        String(p.precio_venta).includes(t) ||
-        p.precio_venta.toLocaleString("es-PY").includes(t);
-      if (!coincide) return false;
-    }
+      if (filtroUbicacion === "__sin__") {
+        if (p.ubicacion_principal_id) return false;
+      } else if (filtroUbicacion !== "" && p.ubicacion_principal_id !== filtroUbicacion) {
+        return false;
+      }
 
-    // Valuación
-    if (filtroValuacion !== "" && p.metodo_valuacion !== filtroValuacion) return false;
+      if (filtroPrecio === "sin_precio" && p.precio_venta > 0) return false;
+      if (filtroPrecio === "con_precio" && !(p.precio_venta > 0)) return false;
 
-    // Ubicación
-    if (filtroUbicacion === "__sin__") {
-      if (p.ubicacion_principal_id) return false;
-    } else if (filtroUbicacion !== "") {
-      if (p.ubicacion_principal_id !== filtroUbicacion) return false;
-    }
+      const tieneBarras = typeof p.codigo_barras === "string" && p.codigo_barras.trim() !== "";
+      if (filtroBarras === "con" && !tieneBarras) return false;
+      if (filtroBarras === "sin" && tieneBarras) return false;
 
-    // Solo stock bajo
-    if (soloStockBajo && p.stock_actual > p.stock_minimo) return false;
+      if (filtroMargen !== "") {
+        const m = calcularMargenVenta(p.costo_promedio, p.precio_venta);
+        if (filtroMargen === "alto" && m < 40) return false;
+        if (filtroMargen === "medio" && (m < 20 || m >= 40)) return false;
+        if (filtroMargen === "bajo" && m >= 20) return false;
+      }
+      return true;
+    });
 
-    // Tipo gastronómico (vendible/insumo/mixto)
-    if (filtroTipo !== "todos") {
-      const v = p.es_vendible !== false; // default true si null/undef
-      const i = p.es_insumo === true;
-      if (filtroTipo === "mixtos" && !(v && i)) return false;
-      if (filtroTipo === "vendibles" && !(v && !i)) return false;
-      if (filtroTipo === "insumos" && !(i && !v)) return false;
-    }
+    const ordenada = [...lista];
+    if (orden === "nombre") ordenada.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+    else if (orden === "stock_asc") ordenada.sort((a, b) => a.stock_actual - b.stock_actual);
+    else if (orden === "valor_desc")
+      ordenada.sort((a, b) => b.stock_actual * b.costo_promedio - a.stock_actual * a.costo_promedio);
+    else
+      ordenada.sort(
+        (a, b) =>
+          calcularMargenVenta(b.costo_promedio, b.precio_venta) -
+          calcularMargenVenta(a.costo_promedio, a.precio_venta)
+      );
+    return ordenada;
+  }, [universo, busqueda, filtroEstado, filtroUbicacion, filtroPrecio, filtroBarras, filtroMargen, orden]);
 
-    // Filtro por tab (Reventa | Menú | Materia prima)
-    const esVendible    = p.es_vendible !== false;
-    const esInsumo      = p.es_insumo === true;
-    const controlaStock = p.controla_stock !== false; // default true
-    if (tab === "reventa") {
-      // vendibles que mueven stock real (gaseosas, postres comprados, etc.)
-      if (!esVendible || !controlaStock || esInsumo) return false;
-    } else if (tab === "menu") {
-      // productos preparados (pizzas, lomitos, combos): vendibles SIN stock
-      if (!esVendible || controlaStock || esInsumo) return false;
-    } else {
-      // materia prima / insumos
-      if (!esInsumo) return false;
-    }
-
-    return true;
-  }), [
-    todos,
-    filtroPorNombre,
-    filtroPorSku,
-    filtroPorCosto,
-    filtroPorPrecio,
-    filtroValuacion,
-    filtroUbicacion,
-    soloStockBajo,
-    filtroTipo,
-    tab,
-  ]);
-
-  // Resumen del listado visible (por pestaña). Solo productos que controlan stock
-  // entran en valorizado / bajo / disponibles; el resto (Menú sin control) se cuenta
-  // únicamente en "Total productos".
+  /** Resumen sobre TODO el universo (no sobre la página), para que no cambie al paginar. */
   const resumen = useMemo(() => {
-    // Tienen stock real: Reventa (controla_stock) y Materia prima (insumos, que se
-    // mueven por compras/recetas). Solo el Menú "sin control" queda fuera.
-    // produccion_previa (Menú fabricado y stockeado) sí maneja stock real del terminado.
-    const conStock = productos.filter(
+    const conStock = universo.filter(
       (p) => !(p.controla_stock === false && p.es_insumo !== true && p.modo_receta !== "produccion_previa")
     );
-    const stockValorizado = conStock.reduce((s, p) => s + p.stock_actual * p.costo_promedio, 0);
-    const bajo = conStock.filter((p) => p.stock_actual <= p.stock_minimo).length;
-    const disponibles = conStock.filter((p) => p.stock_actual > 0).length;
-    return { total: productos.length, stockValorizado, bajo, disponibles, conStock: conStock.length };
-  }, [productos]);
+    return {
+      total: universo.length,
+      stockValorizado: conStock.reduce((s, p) => s + p.stock_actual * p.costo_promedio, 0),
+      sinStock: conStock.filter((p) => p.stock_actual <= 0).length,
+      bajo: conStock.filter((p) => p.stock_actual > 0 && p.stock_actual <= p.stock_minimo).length,
+      disponibles: conStock.filter((p) => p.stock_actual > 0).length,
+    };
+  }, [universo]);
 
-  const hayFiltrosActivos =
-    filtroPorNombre || filtroPorSku || filtroPorCosto ||
-    filtroPorPrecio || filtroValuacion || filtroUbicacion || soloStockBajo ||
-    filtroTipo !== "todos";
+  const hayFiltros =
+    busqueda.trim() !== "" || filtroEstado !== "" || filtroUbicacion !== "" ||
+    filtroPrecio !== "" || filtroBarras !== "" || filtroMargen !== "";
 
   function limpiarFiltros() {
-    setFiltroPorNombre("");
-    setFiltroPorSku("");
-    setFiltroPorCosto("");
-    setFiltroPorPrecio("");
-    setFiltroValuacion("");
+    setBusqueda("");
+    setFiltroEstado("");
     setFiltroUbicacion("");
-    setSoloStockBajo(false);
-    setFiltroTipo("todos");
+    setFiltroPrecio("");
+    setFiltroBarras("");
+    setFiltroMargen("");
+    setPagina(1);
   }
 
-  return (
-    <div className="space-y-8">
+  // Al cambiar filtros u orden, volver a la primera página: si no, el usuario
+  // filtra y ve "sin resultados" solo porque quedó parado en la página 5.
+  useEffect(() => {
+    setPagina(1);
+  }, [busqueda, filtroEstado, filtroUbicacion, filtroPrecio, filtroBarras, filtroMargen, orden, porPagina]);
 
+  const totalPaginas = Math.max(1, Math.ceil(productos.length / porPagina));
+  const paginaSegura = Math.min(pagina, totalPaginas);
+  const visibles = useMemo(
+    () => productos.slice((paginaSegura - 1) * porPagina, paginaSegura * porPagina),
+    [productos, paginaSegura, porPagina]
+  );
+  const desde = productos.length === 0 ? 0 : (paginaSegura - 1) * porPagina + 1;
+  const hasta = Math.min(paginaSegura * porPagina, productos.length);
+
+  return (
+    <div className="space-y-6">
+      {/* Encabezado */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -233,7 +223,7 @@ export default function InventarioPage() {
           <h1 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Inventario</h1>
           <p className="mt-0.5 text-xs text-slate-500">Gestión de productos y control de stock</p>
         </div>
-        <div className="flex items-center gap-2 mt-1">
+        <div className="mt-1 flex flex-wrap items-center gap-2">
           <ExportExcelButton url="/api/inventario/productos/export" />
           <ImportExcelButton
             entidad="Productos"
@@ -244,255 +234,355 @@ export default function InventarioPage() {
             visible={isAdmin}
             onCompleted={() => setRefreshKey((k) => k + 1)}
           />
+          <Link href="/inventario/nuevo" className={btnPrimario}>
+            <Plus className="h-4 w-4" />
+            Nuevo producto
+          </Link>
         </div>
       </div>
 
-      {/* Resumen */}
+      {/* Resumen — las tarjetas de estado además filtran */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard compact label="Total productos" value={String(resumen.total)} accent
-          hint={tab === "reventa" ? "Reventa" : tab === "menu" ? "Menú" : "Materia prima"} />
-        <StatCard compact label="Stock valorizado" value={formatGs(Math.round(resumen.stockValorizado))}
-          hint="stock × costo prom." />
-        <StatCard compact label="Stock bajo" value={String(resumen.bajo)}
-          hint="≤ stock mínimo" />
-        <StatCard compact
-          label={tab === "materia" ? "Materias disponibles" : "Con stock disponible"}
-          value={String(resumen.disponibles)} hint="stock > 0" />
+        <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <p className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+              Total productos
+            </p>
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#4FAEB2]/12 text-[#3F8E91]">
+              <Package className="h-3.5 w-3.5" />
+            </span>
+          </div>
+          <p className="mt-1 text-2xl font-bold tracking-tight tabular-nums text-slate-900">{resumen.total}</p>
+          <p className="text-[11px] text-slate-400">de reventa</p>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <p className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+              Stock valorizado
+            </p>
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#4FAEB2]/12 text-[#3F8E91]">
+              <Coins className="h-3.5 w-3.5" />
+            </span>
+          </div>
+          <p className="mt-1 truncate text-2xl font-bold tracking-tight tabular-nums text-slate-900">
+            {formatGs(resumen.stockValorizado)}
+          </p>
+          <p className="text-[11px] text-slate-400">stock × costo prom.</p>
+        </div>
+
+        {([
+          { id: "sin_stock" as const, label: "Sin stock", valor: resumen.sinStock, Icon: AlertTriangle, tono: "text-red-600", chip: "bg-red-50 text-red-600" },
+          { id: "bajo" as const, label: "Stock bajo", valor: resumen.bajo, Icon: AlertTriangle, tono: "text-amber-600", chip: "bg-amber-50 text-amber-600" },
+        ]).map((t) => {
+          const activo = filtroEstado === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setFiltroEstado(activo ? "" : t.id)}
+              aria-pressed={activo}
+              className={`rounded-xl border bg-white p-3.5 text-left shadow-sm transition-[transform,border-color,box-shadow] duration-150 ease-out active:scale-[0.98] ${
+                activo ? "border-[#4FAEB2] ring-2 ring-[#4FAEB2]/20" : "border-slate-200 hover:border-slate-300"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                  {t.label}
+                </p>
+                <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${t.chip}`}>
+                  <t.Icon className="h-3.5 w-3.5" />
+                </span>
+              </div>
+              <p className={`mt-1 text-2xl font-bold tracking-tight tabular-nums ${t.valor > 0 ? t.tono : "text-slate-900"}`}>
+                {t.valor}
+              </p>
+              <p className="text-[11px] text-slate-400">{activo ? "filtrando" : "clic para filtrar"}</p>
+            </button>
+          );
+        })}
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm ring-1 ring-[#4FAEB2]/15 sm:p-5 lg:p-6">
-
-        <div className="flex flex-wrap justify-between items-center gap-3 mb-5">
-          <div className="flex items-center gap-3 flex-wrap">
-            <h2 className="text-xl font-semibold">Productos</h2>
-            <Link
-              href="/inventario/nuevo"
-              className="rounded-lg bg-[#4FAEB2] px-3 py-1.5 text-xs font-semibold text-white shadow-sm shadow-[#4FAEB2]/25 transition-colors hover:bg-[#3F8E91] active:scale-95"
-            >
-              Nuevo producto
-            </Link>
+      {/* Buscador + filtros */}
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
-              type="text"
-              placeholder="Buscar por nombre o código de barras…"
-              value={filtroPorNombre}
-              onChange={(e) => setFiltroPorNombre(e.target.value)}
-              className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#0EA5E9] focus:outline-none sm:w-64 sm:flex-none"
+              type="search"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              placeholder="Buscar por nombre, SKU o código de barras — palabras en cualquier orden…"
+              className={`${inputClass} pl-9`}
             />
           </div>
+
+          <select
+            value={orden}
+            onChange={(e) => setOrden(e.target.value as typeof orden)}
+            className={`${inputClass} w-auto`}
+            aria-label="Ordenar"
+          >
+            <option value="nombre">Nombre (A-Z)</option>
+            <option value="stock_asc">Menor stock primero</option>
+            <option value="valor_desc">Mayor valor en stock</option>
+            <option value="margen_desc">Mayor margen</option>
+          </select>
+
+          <button
+            type="button"
+            onClick={() => setVerFiltros((v) => !v)}
+            className={`${btnSecundario} ${verFiltros || hayFiltros ? "border-[#4FAEB2] text-[#3F8E91]" : ""}`}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            Filtros
+            {hayFiltros && (
+              <span className="ml-1 rounded-full bg-[#4FAEB2] px-1.5 text-[10px] font-bold text-white">•</span>
+            )}
+          </button>
+
+          {hayFiltros && (
+            <button type="button" onClick={limpiarFiltros} className={btnSecundario}>
+              <X className="h-3.5 w-3.5" />
+              Limpiar
+            </button>
+          )}
         </div>
 
-        {/* Filtros por columna — fila 1 (SKU/Costo/Precio) oculta para UX simplificada */}
-        <div className="hidden space-y-3 mb-5 pb-5 border-b border-gray-100">
-
-          {/* Fila 1: filtros de texto por columna */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {verFiltros && (
+          <div className="mt-3 grid grid-cols-1 gap-3 border-t border-slate-100 pt-3 sm:grid-cols-2 lg:grid-cols-4">
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Nombre</label>
-              <input
-                type="text"
-                placeholder="Buscar nombre..."
-                value={filtroPorNombre}
-                onChange={(e) => setFiltroPorNombre(e.target.value)}
-                className={inputFilterClass}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">SKU</label>
-              <input
-                type="text"
-                placeholder="Buscar SKU..."
-                value={filtroPorSku}
-                onChange={(e) => setFiltroPorSku(e.target.value)}
-                className={inputFilterClass}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Costo promedio</label>
-              <input
-                type="text"
-                placeholder="Ej: 35000"
-                value={filtroPorCosto}
-                onChange={(e) => setFiltroPorCosto(e.target.value)}
-                className={inputFilterClass}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Precio venta</label>
-              <input
-                type="text"
-                placeholder="Ej: 75000"
-                value={filtroPorPrecio}
-                onChange={(e) => setFiltroPorPrecio(e.target.value)}
-                className={inputFilterClass}
-              />
-            </div>
-          </div>
-
-          {/* Fila 2: valuación, ubicación, stock bajo, limpiar y contador
-              Ocultada para instancia En lo de Mari — la lógica de filtros sigue activa pero sin UI. */}
-          <div className="hidden flex-wrap items-center gap-3">
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Valuación</label>
-              <select
-                value={filtroValuacion}
-                onChange={(e) => setFiltroValuacion(e.target.value as MetodoValuacion | "")}
-                className={inputFilterClass}
-              >
-                <option value="">Todos los métodos</option>
-                <option value="CPP">CPP</option>
-                <option value="FIFO">FIFO</option>
-                <option value="LIFO">LIFO</option>
+              <label className="mb-1 block text-xs font-medium text-slate-500">Estado de stock</label>
+              <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value as EstadoStock | "")} className={inputClass}>
+                <option value="">Todos</option>
+                <option value="sin_stock">Sin stock</option>
+                <option value="bajo">Stock bajo</option>
+                <option value="ok">Disponible</option>
               </select>
             </div>
-            <div className="min-w-[14rem]">
-              <label className="block text-xs text-gray-400 mb-1">Depósito / Ubicación</label>
-              <select
-                value={filtroUbicacion}
-                onChange={(e) => setFiltroUbicacion(e.target.value)}
-                className={`${inputFilterClass} w-full`}
-              >
-                <option value="">Todas las ubicaciones</option>
-                <option value="__sin__">Sin ubicación asignada</option>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">Ubicación</label>
+              <select value={filtroUbicacion} onChange={(e) => setFiltroUbicacion(e.target.value)} className={inputClass}>
+                <option value="">Todas</option>
+                <option value="__sin__">Sin ubicación</option>
                 {ubicaciones.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.nombre} — {u.tipo}
-                  </option>
+                  <option key={u.id} value={u.id}>{u.nombre}</option>
                 ))}
               </select>
             </div>
-            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none mt-4">
-              <input
-                type="checkbox"
-                checked={soloStockBajo}
-                onChange={(e) => setSoloStockBajo(e.target.checked)}
-                className="rounded"
-              />
-              Solo stock bajo
-            </label>
-            <div className="mt-4 flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 p-0.5">
-              {(["todos","vendibles","insumos","mixtos"] as const).map((opt) => (
-                <button
-                  key={opt}
-                  type="button"
-                  onClick={() => setFiltroTipo(opt)}
-                  className={`px-2.5 py-1 text-xs font-medium rounded transition ${
-                    filtroTipo === opt
-                      ? "bg-white text-amber-700 shadow-sm"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  {opt === "todos" ? "Todos" : opt[0].toUpperCase() + opt.slice(1)}
-                </button>
-              ))}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">Precio de venta</label>
+              <select value={filtroPrecio} onChange={(e) => setFiltroPrecio(e.target.value as typeof filtroPrecio)} className={inputClass}>
+                <option value="">Todos</option>
+                <option value="sin_precio">Sin precio (Gs. 0)</option>
+                <option value="con_precio">Con precio cargado</option>
+              </select>
             </div>
-            {hayFiltrosActivos && (
-              <button
-                onClick={limpiarFiltros}
-                className="mt-4 text-sm text-gray-400 hover:text-gray-600 transition-colors px-2"
-              >
-                Limpiar filtros
-              </button>
-            )}
-            <span className="ml-auto text-sm text-gray-400 self-end mb-0.5">
-              {productos.length} de {todos.length} productos
-            </span>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">Margen</label>
+              <select value={filtroMargen} onChange={(e) => setFiltroMargen(e.target.value as typeof filtroMargen)} className={inputClass}>
+                <option value="">Todos</option>
+                <option value="alto">Alto (≥ 40%)</option>
+                <option value="medio">Medio (20-40%)</option>
+                <option value="bajo">Bajo (&lt; 20%)</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">Código de barras</label>
+              <select value={filtroBarras} onChange={(e) => setFiltroBarras(e.target.value as typeof filtroBarras)} className={inputClass}>
+                <option value="">Todos</option>
+                <option value="con">Con código</option>
+                <option value="sin">Sin código</option>
+              </select>
+            </div>
           </div>
-
-        </div>
-
-        <EdgeScrollArea>
-          {/* min-w-[1100px] fuerza scroll horizontal real en mobile; en >=lg
-              vuelve a comportarse natural. Columnas no críticas (SKU, Unidad,
-              Ubicacion, Valuacion, Margen) se ocultan progresivamente. */}
-          <table className="w-full min-w-[780px] lg:min-w-0 text-left text-sm">
-
-            <thead>
-              <tr className="bg-slate-50 text-slate-600 text-sm font-semibold">
-                <th className="py-3 pr-4 font-medium">Nombre</th>
-                <th className="hidden py-3 pr-4 font-medium lg:table-cell">SKU</th>
-                <th className="py-3 pr-4 font-medium">Costo Prom.</th>
-                {tab !== "materia" && <th className="py-3 pr-4 font-medium">Precio Venta</th>}
-                <th className="py-3 pr-4 font-medium text-center">Stock actual</th>
-                <th className="py-3 pr-4 text-center font-medium hidden lg:table-cell">Stock Mín.</th>
-                <th className="py-3 pr-4 font-medium hidden lg:table-cell">Cód. barras</th>
-                {tab !== "materia" && (
-                  <th className="hidden py-3 pr-6 text-right font-medium lg:table-cell">
-                    <span title="(precio - costo) / precio × 100">Margen s/venta</span>
-                  </th>
-                )}
-                <th className="py-3 pl-4 font-medium text-center w-28">Acción</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {productos.map((p) => {
-                const stockBajo = p.stock_actual <= p.stock_minimo;
-                const margen = calcularMargenVenta(p.costo_promedio, p.precio_venta);
-                // "Sin control" SOLO para Menú (vendible sin stock). Los insumos
-                // (Materia prima) sí tienen stock real aunque controla_stock=false.
-                const sinControl =
-                  p.controla_stock === false && p.es_insumo !== true && p.modo_receta !== "produccion_previa";
-                return (
-                  <tr key={p.id} className="border-b border-slate-200 last:border-0 hover:bg-[#4FAEB2]/[0.04] transition-colors">
-                    <td className="py-4 pr-4 font-medium text-gray-800">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span>{p.nombre}</span>
-                        {(() => {
-                          const v = p.es_vendible !== false;
-                          const i = p.es_insumo === true;
-                          // Mixto/Insumo se siguen mostrando; Vendible queda oculto (redundante: ya hay tab).
-                          if (v && i) return <span className="inline-flex items-center rounded-full bg-purple-100 text-purple-700 text-[10px] font-medium px-2 py-0.5">Mixto</span>;
-                          if (i) return <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-medium px-2 py-0.5">Insumo</span>;
-                          return null;
-                        })()}
-                      </div>
-                    </td>
-                    <td className="hidden py-4 pr-4 font-mono text-gray-500 lg:table-cell">{p.sku}</td>
-                    <td className="py-4 pr-4 text-gray-700">{formatGs(p.costo_promedio)}</td>
-                    {tab !== "materia" && <td className="py-4 pr-4 text-gray-700">{formatGs(p.precio_venta)}</td>}
-                    <td className="py-4 pr-4 text-center">
-                      {sinControl ? (
-                        <span className="text-xs text-gray-400">— sin control</span>
-                      ) : (
-                        <span className={`font-semibold tabular-nums ${stockBajo ? "text-red-600" : "text-gray-800"}`}>
-                          {formatStock(p.stock_actual)}{" "}
-                          <span className={`text-xs font-normal ${stockBajo ? "text-red-400" : "text-gray-400"}`}>{p.unidad_medida}</span>
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-4 pr-4 text-center text-gray-500 hidden lg:table-cell">
-                      {sinControl ? "—" : <span className="tabular-nums">{formatStock(p.stock_minimo)}</span>}
-                    </td>
-                    <td className="py-4 pr-4 hidden lg:table-cell">
-                      {p.codigo_barras ? (
-                        <span className="font-mono text-xs text-gray-700">{p.codigo_barras}</span>
-                      ) : (
-                        <span className="text-gray-300">—</span>
-                      )}
-                    </td>
-                    {tab !== "materia" && (
-                      <td className={`hidden py-4 pr-6 text-right font-semibold tabular-nums lg:table-cell ${margenColor(margen)}`}>
-                        {margen.toFixed(2)}%
-                      </td>
-                    )}
-                    <td className="py-4 pl-4 text-center">
-                      <Link
-                        href={`/inventario/${p.id}/editar`}
-                        className="inline-flex items-center justify-center min-h-[40px] rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50 transition-colors"
-                      >
-                        Editar
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-
-          </table>
-        </EdgeScrollArea>
-
+        )}
       </div>
 
+      {/* Listado */}
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+          <p className="text-sm font-semibold text-slate-900">
+            Productos
+            <span className="ml-2 text-xs font-normal text-slate-400">
+              {productos.length === resumen.total
+                ? `${productos.length} en total`
+                : `${productos.length} de ${resumen.total}`}
+            </span>
+          </p>
+          <div className="flex items-center gap-2">
+            <label htmlFor="porpag" className="text-xs text-slate-500">Por página</label>
+            <select
+              id="porpag"
+              value={porPagina}
+              onChange={(e) => setPorPagina(Number(e.target.value))}
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs outline-none focus:border-[#4FAEB2]"
+            >
+              {POR_PAGINA_OPCIONES.map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {cargando ? (
+          <div className="divide-y divide-slate-100">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="flex items-center gap-4 px-5 py-4">
+                <div className="h-9 w-9 shrink-0 animate-pulse rounded-lg bg-slate-100" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3 w-1/3 animate-pulse rounded bg-slate-100" />
+                  <div className="h-2.5 w-1/5 animate-pulse rounded bg-slate-50" />
+                </div>
+                <div className="h-6 w-20 animate-pulse rounded-full bg-slate-100" />
+              </div>
+            ))}
+          </div>
+        ) : visibles.length === 0 ? (
+          <div className="px-6 py-16 text-center">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-[#4FAEB2]/10">
+              <PackageSearch className="h-5 w-5 text-[#4FAEB2]" />
+            </div>
+            {hayFiltros ? (
+              <>
+                <p className="text-sm font-semibold text-slate-900">Sin resultados</p>
+                <p className="mx-auto mt-1 max-w-sm text-xs text-slate-500">
+                  Ningún producto coincide con la búsqueda o los filtros elegidos.
+                </p>
+                <button type="button" onClick={limpiarFiltros} className={`mt-4 ${btnSecundario}`}>
+                  Limpiar filtros
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-semibold text-slate-900">Todavía no hay productos</p>
+                <p className="mx-auto mt-1 max-w-sm text-xs text-slate-500">
+                  Cargá tu primer producto o importá el catálogo desde Excel.
+                </p>
+                <Link href="/inventario/nuevo" className={`mt-4 ${btnPrimario}`}>
+                  <Plus className="h-4 w-4" />
+                  Nuevo producto
+                </Link>
+              </>
+            )}
+          </div>
+        ) : (
+          <EdgeScrollArea>
+            <table className="w-full min-w-[900px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                  <th className="px-4 py-3">Producto</th>
+                  <th className="px-3 py-3 text-right">Costo prom.</th>
+                  <th className="px-3 py-3 text-right">Precio venta</th>
+                  <th className="px-3 py-3 text-center">Stock</th>
+                  <th className="hidden px-3 py-3 text-right lg:table-cell">Valor</th>
+                  <th className="hidden px-3 py-3 text-right md:table-cell">Margen</th>
+                  <th className="hidden px-3 py-3 lg:table-cell">Ubicación</th>
+                  <th className="w-10 px-2 py-3"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {visibles.map((p, i) => {
+                  const estado = estadoStockDe(p);
+                  const meta = ESTADO_META[estado];
+                  const margen = calcularMargenVenta(p.costo_promedio, p.precio_venta);
+                  const valor = p.stock_actual * p.costo_promedio;
+                  const ubi = p.ubicacion_principal_id ? ubicacionById.get(p.ubicacion_principal_id) : null;
+                  return (
+                    <tr
+                      key={p.id}
+                      className="zentra-row-in align-middle transition-colors duration-150 hover:bg-[#4FAEB2]/5"
+                      style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}
+                    >
+                      <td className="px-4 py-3">
+                        <p className="font-semibold leading-snug text-slate-900">{p.nombre}</p>
+                        <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-slate-400">
+                          <span className="font-mono">{p.sku}</span>
+                          {p.codigo_barras && (
+                            <>
+                              <span className="text-slate-300">·</span>
+                              <span className="font-mono">{p.codigo_barras}</span>
+                            </>
+                          )}
+                        </p>
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums text-slate-600">
+                        {p.costo_promedio > 0 ? formatGs(p.costo_promedio) : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums font-medium text-slate-800">
+                        {p.precio_venta > 0
+                          ? formatGs(p.precio_venta)
+                          : <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700">sin precio</span>}
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <span className={`text-sm font-bold tabular-nums ${meta.texto}`}>
+                          {formatStock(p.stock_actual)}
+                        </span>
+                        <p className="text-[11px] text-slate-400 tabular-nums">mín. {formatStock(p.stock_minimo)}</p>
+                        <span className={`mt-0.5 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${meta.badge}`}>
+                          {meta.label}
+                        </span>
+                      </td>
+                      <td className="hidden px-3 py-3 text-right tabular-nums text-slate-600 lg:table-cell">
+                        {valor > 0 ? formatGs(valor) : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="hidden px-3 py-3 text-right md:table-cell">
+                        <span className={`text-sm font-semibold tabular-nums ${margenColor(margen)}`}>
+                          {margen.toFixed(1)}%
+                        </span>
+                      </td>
+                      <td className="hidden px-3 py-3 text-xs text-slate-500 lg:table-cell">
+                        {ubi ? ubi.nombre : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="px-2 py-3 text-center">
+                        <Link
+                          href={`/inventario/${p.id}/editar`}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-[#4FAEB2] hover:text-[#3F8E91]"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Editar
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </EdgeScrollArea>
+        )}
+
+        {/* Paginado */}
+        {!cargando && productos.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3">
+            <p className="text-xs text-slate-500 tabular-nums">
+              Mostrando {desde}–{hasta} de {productos.length}
+            </p>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setPagina((n) => Math.max(1, n - 1))}
+                disabled={paginaSegura <= 1}
+                className={btnSecundario}
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Anterior
+              </button>
+              <span className="px-3 text-xs font-medium tabular-nums text-slate-600">
+                {paginaSegura} / {totalPaginas}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPagina((n) => Math.min(totalPaginas, n + 1))}
+                disabled={paginaSegura >= totalPaginas}
+                className={btnSecundario}
+              >
+                Siguiente
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

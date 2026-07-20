@@ -172,8 +172,8 @@ const ultimaEvalOrdenes = new Map<string, number>();
  *   - `orden_por_llegar`: la fecha estimada está dentro de los próximos 3 días.
  *   - `orden_atrasada`: la fecha estimada ya pasó y sigue pendiente.
  *
- * Deja de emitir solo cuando la orden queda `completa` o `cancelada`, porque la
- * consulta filtra por `estado_recepcion IN ('pendiente','parcial')`.
+ * Deja de emitir solo cuando la OC queda `recibida_total` o `cancelada`, porque
+ * la consulta filtra por `estado IN ('pendiente','recibida_parcial')`.
  *
  * Best-effort y throttled: se llama desde el GET de la campanita, igual que los
  * documentos, así no hace falta cron.
@@ -188,12 +188,15 @@ export async function evaluarOrdenesPendientes(
   ultimaEvalOrdenes.set(empresaId, now);
 
   const schema = assertAllowedChatDataSchema(schemaRaw);
-  const compras = quoteSchemaTable(schema, "compras");
+  // La fuente de verdad de lo pendiente es la ORDEN DE COMPRA, no `compras`:
+  // en este modelo `compras` solo nace de lo YA recibido, así que nunca tiene
+  // saldo. La OC arrastra `cantidad - cantidad_recibida` hasta completarse.
+  const ordenes = quoteSchemaTable(schema, "ordenes_compra");
   const notifs = quoteSchemaTable(schema, "notificaciones");
   const p = pool();
   const hoy = hoyAsuncionYmd();
 
-  // Una fila por ORDEN (no por línea): se agrupa por numero_control.
+  // Una fila por ORDEN (no por línea): se agrupa por numero_oc.
   const { rows } = await p.query<{
     numero_control: string;
     proveedor_nombre: string;
@@ -202,18 +205,18 @@ export async function evaluarOrdenesPendientes(
     fecha_estimada: string | null;
     dias_para_llegada: string | null;
   }>(
-    `SELECT numero_control,
+    `SELECT numero_oc AS numero_control,
             MIN(proveedor_nombre) AS proveedor_nombre,
             COUNT(*) FILTER (WHERE cantidad - cantidad_recibida > 0) AS productos_pendientes,
-            COALESCE(SUM(cantidad - cantidad_recibida), 0) AS unidades_pendientes,
+            COALESCE(SUM(GREATEST(cantidad - cantidad_recibida, 0)), 0) AS unidades_pendientes,
             MIN(fecha_estimada_llegada)::text AS fecha_estimada,
             (MIN(fecha_estimada_llegada) - $2::date) AS dias_para_llegada
-       FROM ${compras}
+       FROM ${ordenes}
       WHERE empresa_id = $1::uuid
-        AND estado_recepcion IN ('pendiente', 'parcial')
-        AND anulada_at IS NULL
-      GROUP BY numero_control
-     HAVING COALESCE(SUM(cantidad - cantidad_recibida), 0) > 0`,
+        AND estado IN ('pendiente', 'recibida_parcial')
+        AND cancelada_at IS NULL
+      GROUP BY numero_oc
+     HAVING COALESCE(SUM(GREATEST(cantidad - cantidad_recibida, 0)), 0) > 0`,
     [empresaId, hoy]
   );
   if (rows.length === 0) return 0;
@@ -252,7 +255,7 @@ export async function evaluarOrdenesPendientes(
        ON CONFLICT (empresa_id, numero_control, tipo)
          WHERE leida = false AND numero_control IS NOT NULL
        DO NOTHING`,
-      [empresaId, tipo, titulo, mensaje, o.numero_control, `/compras?orden=${encodeURIComponent(o.numero_control)}`]
+      [empresaId, tipo, titulo, mensaje, o.numero_control, `/compras/ordenes?oc=${encodeURIComponent(o.numero_control)}`]
     );
     creadas += r.rowCount ?? 0;
   }

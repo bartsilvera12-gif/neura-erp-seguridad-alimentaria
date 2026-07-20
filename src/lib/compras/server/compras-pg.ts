@@ -103,7 +103,8 @@ const COLS = `
   created_at, updated_at, created_by, usuario_nombre,
   cantidad_recibida, estado_recepcion, fecha_estimada_llegada,
   fecha_ultima_recepcion, recepcion_completada_at,
-  cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual
+  cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual,
+  numero_factura, orden_compra_numero, orden_compra_item_id, observacion
 `;
 
 export interface InsertCompraInput {
@@ -200,6 +201,11 @@ export interface CompraHeaderInput {
   comprobante_mime_type: string | null;
   created_by: string | null;
   usuario_nombre: string | null;
+  /** N° de factura del proveedor. Se captura al recibir la mercadería. */
+  numero_factura?: string | null;
+  /** OC de origen (OC-XXXXXX) cuando la compra nace de una orden. */
+  orden_compra_numero?: string | null;
+  observacion?: string | null;
 }
 
 /** Una línea (producto) de la compra. */
@@ -217,6 +223,8 @@ export interface CompraItemInput {
   margen_venta: number | null;
   /** Fecha estimada propia de este producto; pisa la general de la cabecera. */
   fecha_estimada_llegada?: string | null;
+  /** Línea de `ordenes_compra` que origina esta compra (trazabilidad 1:1). */
+  orden_compra_item_id?: string | null;
 }
 
 export interface ComprasMultiResult {
@@ -233,6 +241,149 @@ export interface ComprasMultiResult {
  *
  * La compra simple es el caso N=1; el endpoint envuelve el body viejo en items=[…].
  */
+/**
+ * Compra MULTIPRODUCTO — variante transaccional: recibe un `client` en vez de
+ * abrir su propia transacción, para que la recepción de una orden de compra
+ * pueda meter la compra, el stock y el avance de la OC en un mismo BEGIN/COMMIT.
+ *
+ * Una COMPRA representa mercadería que YA ingresó: por eso acá sí se genera el
+ * movimiento ENTRADA y se suma stock. Lo previo (el pedido al proveedor) vive
+ * en `ordenes_compra`, que no toca inventario.
+ */
+export async function insertComprasConImpactoTx(
+  client: import("pg").PoolClient,
+  schema: string,
+  empresaId: string,
+  header: CompraHeaderInput,
+  items: CompraItemInput[]
+): Promise<ComprasMultiResult> {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error("La compra no tiene productos.");
+  }
+  const tC = quoteSchemaTable(schema, "compras");
+  const tM = quoteSchemaTable(schema, "movimientos_inventario");
+  const tP = quoteSchemaTable(schema, "productos");
+  const tPP = quoteSchemaTable(schema, "proveedor_productos");
+
+  const insertedRows: CompraRow[] = [];
+  const warnings: string[] = [];
+  const numero = await nextNumeroControl(client, schema, empresaId);
+
+  for (const it of items) {
+    const { rows: compraRows } = await client.query<CompraRow>(
+      `INSERT INTO ${tC} (
+         empresa_id, proveedor_id, proveedor_nombre, producto_id, producto_nombre,
+         cantidad, moneda, tipo_cambio, costo_unitario_original, costo_unitario,
+         iva_tipo, subtotal, monto_iva, total, precio_venta, margen_venta,
+         tipo_pago, plazo_dias, nro_timbrado, numero_control, estado, fecha,
+         fecha_factura, metodo_pago,
+         comprobante_url, comprobante_storage_path, comprobante_nombre, comprobante_mime_type,
+         created_by, usuario_nombre,
+         cantidad_recibida, estado_recepcion,
+         cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual,
+         numero_factura, orden_compra_numero, orden_compra_item_id, observacion
+       ) VALUES (
+         $1::uuid, $2::uuid, $3, $4::uuid, $5,
+         $6::numeric, $7, $8::numeric, $9::numeric, $10::numeric,
+         $11, $12::numeric, $13::numeric, $14::numeric, $15::numeric, $16::numeric,
+         $17, $18::integer, $19, $20, 'registrada', now(),
+         $21::date, $22,
+         $23, $24, $25, $26,
+         $27::uuid, $28,
+         $6::numeric, 'completa',
+         $29, $30::timestamptz, $31::boolean,
+         $32, $33, $34::uuid, $35
+       )
+       RETURNING ${COLS}`,
+      [
+        empresaId, header.proveedor_id, header.proveedor_nombre,
+        it.producto_id, it.producto_nombre,
+        it.cantidad, header.moneda, header.tipo_cambio,
+        it.costo_unitario_original, it.costo_unitario,
+        it.iva_tipo, it.subtotal, it.monto_iva, it.total, it.precio_venta, it.margen_venta,
+        header.tipo_pago, header.plazo_dias, header.nro_timbrado, numero,
+        header.fecha_factura, header.metodo_pago,
+        header.comprobante_url, header.comprobante_storage_path,
+        header.comprobante_nombre, header.comprobante_mime_type,
+        header.created_by, header.usuario_nombre,
+        header.cotizacion_fuente ?? null,
+        header.cotizacion_fecha ?? null,
+        header.cotizacion_es_manual ?? false,
+        header.numero_factura ?? null,
+        header.orden_compra_numero ?? null,
+        it.orden_compra_item_id ?? null,
+        header.observacion ?? null,
+      ]
+    );
+    insertedRows.push(compraRows[0]);
+
+    // Movimiento ENTRADA por línea.
+    try {
+      await client.query(
+        `INSERT INTO ${tM} (
+           empresa_id, producto_id, producto_nombre, producto_sku,
+           tipo, cantidad, costo_unitario, origen, referencia, fecha,
+           created_by, usuario_nombre, compra_id
+         )
+         SELECT $1::uuid, $2::uuid, $3, COALESCE(p.sku, ''),
+                'ENTRADA', $4::numeric, $5::numeric, 'compra', $6, now(),
+                $7::uuid, $8, $9::uuid
+         FROM ${tP} p WHERE p.id = $2::uuid`,
+        [empresaId, it.producto_id, it.producto_nombre, it.cantidad,
+         it.costo_unitario, numero, header.created_by, header.usuario_nombre,
+         compraRows[0].id]
+      );
+    } catch (movErr) {
+      const msg = movErr instanceof Error ? movErr.message : String(movErr);
+      console.error("[compras-pg] movimiento ENTRADA fallo", {
+        schema, empresaId, numero, producto: it.producto_id, message: msg,
+      });
+      warnings.push(it.producto_nombre);
+    }
+
+    // Stock + costo promedio PONDERADO.
+    //
+    // El original de FR pisaba `costo_promedio` con el último costo. Con
+    // entregas parciales a distinto precio eso da un costo incorrecto, así que
+    // acá se pondera contra el stock previo:
+    //   nuevo = (stock * costo_actual + recibido * costo_compra) / (stock + recibido)
+    // Si el stock previo es <= 0, el costo pasa a ser el de esta entrada.
+    //
+    // `precio_venta` solo se pisa si la compra trae un precio > 0: para materia
+    // prima / insumos sin precio se conserva el actual.
+    await client.query(
+      `UPDATE ${tP}
+          SET costo_promedio = CASE
+                WHEN COALESCE(stock_actual, 0) <= 0 THEN $2::numeric
+                WHEN COALESCE(stock_actual, 0) + $1::numeric <= 0 THEN $2::numeric
+                ELSE ROUND(
+                  ((COALESCE(stock_actual,0) * COALESCE(costo_promedio,0)) + ($1::numeric * $2::numeric))
+                  / (COALESCE(stock_actual,0) + $1::numeric)
+                , 4)
+              END,
+              stock_actual = COALESCE(stock_actual, 0) + $1::numeric,
+              precio_venta = CASE WHEN $3::numeric > 0 THEN $3::numeric ELSE precio_venta END,
+              updated_at = now()
+        WHERE id = $4::uuid AND empresa_id = $5::uuid`,
+      [it.cantidad, it.costo_unitario, it.precio_venta, it.producto_id, empresaId]
+    );
+
+    // Relación producto↔proveedor (costo_habitual). No pisa marca.
+    await upsertProveedorProducto(
+      client, tPP, empresaId, it.producto_id, header.proveedor_id, it.costo_unitario
+    );
+  }
+
+  return {
+    numero_control: numero,
+    compras: insertedRows,
+    movimiento_warning: warnings.length
+      ? `La compra se guardó pero no se registró el movimiento de entrada para: ${warnings.join(", ")}.`
+      : null,
+  };
+}
+
+/** Compra MULTIPRODUCTO con transacción propia. Envuelve a la variante `Tx`. */
 export async function insertComprasConImpacto(
   schemaRaw: string,
   empresaId: string,
@@ -240,92 +391,12 @@ export async function insertComprasConImpacto(
   items: CompraItemInput[]
 ): Promise<ComprasMultiResult> {
   const schema = assertAllowedChatDataSchema(schemaRaw);
-  if (!Array.isArray(items) || items.length === 0) {
-    throw new Error("La compra no tiene productos.");
-  }
-  const tC = quoteSchemaTable(schema, "compras");
-  // Nota: crear la ORDEN ya no impacta inventario — el movimiento y el stock
-  // viven en recepciones-pg.ts, por cada entrega recibida.
-  const tPP = quoteSchemaTable(schema, "proveedor_productos");
-
   const client = await pool().connect();
-  const insertedRows: CompraRow[] = [];
-  const warnings: string[] = [];
   try {
     await client.query("BEGIN");
-    const numero = await nextNumeroControl(client, schema, empresaId);
-
-    for (const it of items) {
-      const { rows: compraRows } = await client.query<CompraRow>(
-        `INSERT INTO ${tC} (
-           empresa_id, proveedor_id, proveedor_nombre, producto_id, producto_nombre,
-           cantidad, moneda, tipo_cambio, costo_unitario_original, costo_unitario,
-           iva_tipo, subtotal, monto_iva, total, precio_venta, margen_venta,
-           tipo_pago, plazo_dias, nro_timbrado, numero_control, estado, fecha,
-           fecha_factura, metodo_pago,
-           comprobante_url, comprobante_storage_path, comprobante_nombre, comprobante_mime_type,
-           created_by, usuario_nombre,
-           cantidad_recibida, estado_recepcion, fecha_estimada_llegada,
-           cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual
-         ) VALUES (
-           $1::uuid, $2::uuid, $3, $4::uuid, $5,
-           $6::numeric, $7, $8::numeric, $9::numeric, $10::numeric,
-           $11, $12::numeric, $13::numeric, $14::numeric, $15::numeric, $16::numeric,
-           $17, $18::integer, $19, $20, 'registrada', now(),
-           $21::date, $22,
-           $23, $24, $25, $26,
-           $27::uuid, $28,
-           0, 'pendiente', $29::date,
-           $30, $31::timestamptz, $32::boolean
-         )
-         RETURNING ${COLS}`,
-        [
-          empresaId, header.proveedor_id, header.proveedor_nombre,
-          it.producto_id, it.producto_nombre,
-          it.cantidad, header.moneda, header.tipo_cambio,
-          it.costo_unitario_original, it.costo_unitario,
-          it.iva_tipo, it.subtotal, it.monto_iva, it.total, it.precio_venta, it.margen_venta,
-          header.tipo_pago, header.plazo_dias, header.nro_timbrado, numero,
-          header.fecha_factura, header.metodo_pago,
-          header.comprobante_url, header.comprobante_storage_path,
-          header.comprobante_nombre, header.comprobante_mime_type,
-          header.created_by, header.usuario_nombre,
-          // Fecha estimada: la de la línea pisa a la general de la cabecera.
-          it.fecha_estimada_llegada ?? header.fecha_estimada_llegada ?? null,
-          header.cotizacion_fuente ?? null,
-          header.cotizacion_fecha ?? null,
-          header.cotizacion_es_manual ?? false,
-        ]
-      );
-      insertedRows.push(compraRows[0]);
-
-      // ⚠️ Crear la ORDEN ya NO impacta inventario.
-      //
-      // Antes acá se insertaba el movimiento ENTRADA y se sumaba stock, o sea
-      // "comprar == recibir". Con recepciones parciales eso se separa: la orden
-      // nace en `estado_recepcion='pendiente'` con `cantidad_recibida=0`, y el
-      // stock/costo/movimiento los mueve `registrarRecepcion()`
-      // (src/lib/compras/server/recepciones-pg.ts), una vez por cada entrega.
-      //
-      // Las compras HISTÓRICAS ya impactaron stock y quedaron marcadas como
-      // 'completa' en el backfill de la migración 2026-07-16, así que no se
-      // vuelven a contar.
-
-      // La relación producto↔proveedor sí se registra al ordenar (es un dato
-      // comercial, no de inventario). No pisa marca.
-      await upsertProveedorProducto(
-        client, tPP, empresaId, it.producto_id, header.proveedor_id, it.costo_unitario
-      );
-    }
-
+    const out = await insertComprasConImpactoTx(client, schema, empresaId, header, items);
     await client.query("COMMIT");
-    return {
-      numero_control: numero,
-      compras: insertedRows,
-      movimiento_warning: warnings.length
-        ? `La compra se guardó pero no se registró el movimiento de entrada para: ${warnings.join(", ")}.`
-        : null,
-    };
+    return out;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => null);
     throw err;

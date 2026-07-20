@@ -8,7 +8,6 @@ import EdgeScrollArea from "@/components/ui/EdgeScrollArea";
 import { FancySelect } from "@/components/ui/FancySelect";
 import MobileFab from "@/components/ui/MobileFab";
 import AnularCompraModal from "./AnularCompraModal";
-import RegistrarRecepcionModal from "./RegistrarRecepcionModal";
 import type { Compra, TipoPago } from "@/lib/compras/types";
 
 const inputFilterClass =
@@ -63,33 +62,7 @@ type GrupoCompra = {
   total: number;
   comprobante: boolean;
   anulada: boolean;
-  /** Recepción agregada de la orden (todas sus líneas). */
-  estado_recepcion: EstadoRecepcion;
-  unidades_pedidas: number;
-  unidades_recibidas: number;
-  productos_pendientes: number;
-  fecha_estimada: string | null;
-  fecha_ultima_recepcion: string | null;
 };
-
-export type EstadoRecepcion = "pendiente" | "parcial" | "completa" | "cancelada";
-
-export const RECEPCION_META: Record<EstadoRecepcion, { label: string; badge: string }> = {
-  pendiente: { label: "Pendiente", badge: "bg-slate-100 text-slate-600" },
-  parcial: { label: "Parcial", badge: "bg-amber-50 text-amber-700 ring-1 ring-amber-100" },
-  completa: { label: "Completa", badge: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100" },
-  cancelada: { label: "Cancelada", badge: "bg-red-50 text-red-700 ring-1 ring-red-100" },
-};
-
-/** Estado de la ORDEN a partir del de sus líneas. */
-function estadoOrdenDesdeLineas(items: Compra[]): EstadoRecepcion {
-  if (items.length === 0) return "pendiente";
-  const est = items.map((i) => (i.estado_recepcion ?? "pendiente") as EstadoRecepcion);
-  if (est.every((e) => e === "cancelada")) return "cancelada";
-  if (est.every((e) => e === "completa")) return "completa";
-  if (est.some((e) => e === "parcial" || e === "completa")) return "parcial";
-  return "pendiente";
-}
 
 function agrupar(rows: Compra[]): GrupoCompra[] {
   const map = new Map<string, GrupoCompra>();
@@ -109,12 +82,6 @@ function agrupar(rows: Compra[]): GrupoCompra[] {
         total: 0,
         comprobante: false,
         anulada: c.estado === "anulada",
-        estado_recepcion: "pendiente",
-        unidades_pedidas: 0,
-        unidades_recibidas: 0,
-        productos_pendientes: 0,
-        fecha_estimada: null,
-        fecha_ultima_recepcion: null,
       };
       map.set(key, g);
     }
@@ -122,28 +89,7 @@ function agrupar(rows: Compra[]): GrupoCompra[] {
     g.total += Number(c.total) || 0;
     if (c.comprobante_storage_path) g.comprobante = true;
     if (c.estado === "anulada") g.anulada = true;
-
-    // Progreso de recepción.
-    const pedida = Number(c.cantidad) || 0;
-    const recibida = Number(c.cantidad_recibida ?? 0) || 0;
-    g.unidades_pedidas += pedida;
-    g.unidades_recibidas += recibida;
-    if (pedida - recibida > 0) g.productos_pendientes += 1;
-    // La fecha estimada más próxima manda.
-    if (c.fecha_estimada_llegada) {
-      g.fecha_estimada =
-        g.fecha_estimada && g.fecha_estimada < c.fecha_estimada_llegada
-          ? g.fecha_estimada
-          : c.fecha_estimada_llegada;
-    }
-    if (c.fecha_ultima_recepcion) {
-      g.fecha_ultima_recepcion =
-        g.fecha_ultima_recepcion && g.fecha_ultima_recepcion > c.fecha_ultima_recepcion
-          ? g.fecha_ultima_recepcion
-          : c.fecha_ultima_recepcion;
-    }
   }
-  for (const g of map.values()) g.estado_recepcion = estadoOrdenDesdeLineas(g.items);
   return [...map.values()].sort(
     (a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime()
   );
@@ -161,8 +107,6 @@ export default function ComprasPage() {
   const [filtroTipoPago, setFiltroTipoPago] = useState<TipoPago | "">("");
   const [expandidos, setExpandidos] = useState<Set<string>>(new Set());
   const [anularTarget, setAnularTarget] = useState<{ numero: string; proveedor: string } | null>(null);
-  const [filtroRecepcion, setFiltroRecepcion] = useState<EstadoRecepcion | "">("");
-  const [recepcionTarget, setRecepcionTarget] = useState<string | null>(null);
 
   async function recargar() {
     const data = await getCompras();
@@ -189,12 +133,11 @@ export default function ComprasPage() {
         g.numero_control.toLowerCase().includes(texto) ||
         g.items.some((i) => i.producto_nombre.toLowerCase().includes(texto));
       const coincideTipoPago = filtroTipoPago === "" || g.tipo_pago === filtroTipoPago;
-      if (filtroRecepcion !== "" && g.estado_recepcion !== filtroRecepcion) return false;
       return coincideTexto && coincideTipoPago;
     });
-  }, [grupos, busqueda, filtroTipoPago, filtroRecepcion]);
+  }, [grupos, busqueda, filtroTipoPago]);
 
-  const hayFiltros = busqueda || filtroTipoPago || filtroRecepcion;
+  const hayFiltros = busqueda || filtroTipoPago;
 
   function toggle(numero: string) {
     setExpandidos((prev) => {
@@ -243,17 +186,8 @@ export default function ComprasPage() {
               { value: "contado", label: "Contado" },
               { value: "credito", label: "Crédito" },
             ]} />
-          <FancySelect value={filtroRecepcion} onChange={(v) => setFiltroRecepcion(v as EstadoRecepcion | "")}
-            ariaLabel="Filtrar por estado de recepción" className="w-48" size="sm"
-            options={[
-              { value: "", label: "Toda recepción" },
-              { value: "pendiente", label: "Pendientes" },
-              { value: "parcial", label: "Parciales" },
-              { value: "completa", label: "Completas" },
-              { value: "cancelada", label: "Canceladas" },
-            ]} />
           {hayFiltros && (
-            <button onClick={() => { setBusqueda(""); setFiltroTipoPago(""); setFiltroRecepcion(""); }}
+            <button onClick={() => { setBusqueda(""); setFiltroTipoPago(""); }}
               className="text-sm text-gray-400 hover:text-gray-600 transition-colors px-2">
               Limpiar filtros
             </button>
@@ -272,7 +206,6 @@ export default function ComprasPage() {
                 <th className="py-3 pr-4 font-medium">Proveedor</th>
                 <th className="py-3 pr-4 font-medium">Productos</th>
                 <th className="py-3 pr-4 font-medium text-right">Ítems</th>
-                <th className="py-3 pr-4 font-medium">Recepción</th>
                 <th className="py-3 pr-4 font-medium text-right">Total</th>
                 <th className="hidden py-3 pr-4 font-medium lg:table-cell">Pago</th>
                 <th className="hidden py-3 pr-4 font-medium lg:table-cell">Método</th>
@@ -284,7 +217,7 @@ export default function ComprasPage() {
             <tbody>
               {filtrados.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-gray-400">
+                  <td colSpan={10} className="py-12 text-center text-gray-400">
                     {grupos.length === 0 ? "No hay compras registradas" : "Ninguna compra coincide con los filtros"}
                   </td>
                 </tr>
@@ -327,23 +260,6 @@ export default function ComprasPage() {
                           )}
                         </td>
                         <td className="py-4 pr-4 text-right tabular-nums text-gray-700">{g.items.length}</td>
-                        <td className="py-4 pr-4">
-                          <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${RECEPCION_META[g.estado_recepcion].badge}`}>
-                            {RECEPCION_META[g.estado_recepcion].label}
-                          </span>
-                          {g.estado_recepcion !== "cancelada" && (
-                            <p className="mt-1 text-[11px] tabular-nums text-slate-400">
-                              {g.unidades_recibidas} de {g.unidades_pedidas} u
-                              {g.productos_pendientes > 0 && ` · ${g.productos_pendientes} pend.`}
-                            </p>
-                          )}
-                          {g.fecha_estimada && g.estado_recepcion !== "completa" && (
-                            <p className="text-[11px] text-slate-400">Estimada: {formatFechaDate(g.fecha_estimada)}</p>
-                          )}
-                          {g.fecha_ultima_recepcion && (
-                            <p className="text-[11px] text-slate-400">Últ. recepción: {formatFechaDate(g.fecha_ultima_recepcion.slice(0, 10))}</p>
-                          )}
-                        </td>
                         <td className={`py-4 pr-4 text-right tabular-nums font-semibold ${g.anulada ? "line-through text-gray-500" : "text-gray-800"}`}>{formatGs(g.total)}</td>
                         <td className="hidden py-4 pr-4 lg:table-cell">
                           <span className={`px-2 py-1 rounded-full text-xs font-semibold ${g.tipo_pago ? tipoPagoBadge[g.tipo_pago] : "bg-gray-100 text-gray-500"}`}>
@@ -366,32 +282,6 @@ export default function ComprasPage() {
                           {formatFechaDate(g.fecha_factura)}
                         </td>
                         <td className="py-4 text-right">
-                          {!g.anulada && g.estado_recepcion !== "completa" && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setRecepcionTarget(g.numero_control);
-                              }}
-                              className="mr-2 inline-flex items-center justify-center rounded-md bg-[#4FAEB2] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#3F8E91]"
-                              title="Registrar la mercadería recibida de esta orden"
-                            >
-                              Registrar recepción
-                            </button>
-                          )}
-                          {!g.anulada && g.estado_recepcion !== "pendiente" && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setRecepcionTarget(g.numero_control);
-                              }}
-                              className="mr-2 inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
-                              title="Ver el historial de recepciones"
-                            >
-                              Ver recepciones
-                            </button>
-                          )}
                           {!g.anulada && (
                             <button
                               type="button"
@@ -436,15 +326,6 @@ export default function ComprasPage() {
       </div>
 
       <MobileFab href="/compras/nueva" label="Nueva compra" />
-
-      {recepcionTarget && (
-        <RegistrarRecepcionModal
-          numeroControl={recepcionTarget}
-          open={!!recepcionTarget}
-          onClose={() => setRecepcionTarget(null)}
-          onRecepcionRegistrada={() => { void recargar(); }}
-        />
-      )}
 
       {anularTarget && (
         <AnularCompraModal

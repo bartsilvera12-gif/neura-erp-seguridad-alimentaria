@@ -131,6 +131,10 @@ export interface CompraHeaderPayload {
   comprobante_storage_path?: string | null;
   comprobante_nombre?: string | null;
   comprobante_mime_type?: string | null;
+  /** Snapshot de la cotizacion usada. Solo se envia cuando moneda = USD. */
+  cotizacion_fuente?: string | null;
+  cotizacion_fecha?: string | null;
+  cotizacion_es_manual?: boolean;
 }
 
 export interface UploadComprobanteResult {

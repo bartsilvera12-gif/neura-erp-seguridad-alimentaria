@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import TipoCambioField from "@/components/compras/TipoCambioField";
 import { useRouter } from "next/navigation";
 import { Search, Trash2, Loader2, Plus, ImageIcon } from "lucide-react";
 import { getProveedores } from "@/lib/proveedores/storage";
@@ -65,6 +66,11 @@ export default function NuevaOrdenCompraPage() {
     proveedor_id: "",
     moneda: "PYG" as Moneda,
     tipo_cambio: "",
+    // Snapshot de la cotizacion: se pacta al crear la OC y la compra generada
+    // al recibir la hereda, aunque la mercaderia llegue con otro dolar.
+    cotizacion_fuente: null as string | null,
+    cotizacion_fecha: null as string | null,
+    cotizacion_es_manual: false,
     tipo_pago: "contado" as TipoPago,
     plazo_dias: "",
     observacion: "",
@@ -203,6 +209,9 @@ export default function NuevaOrdenCompraPage() {
           proveedor_nombre: prov.nombre,
           moneda: cab.moneda,
           tipo_cambio: tc,
+          cotizacion_fuente: cab.moneda === "USD" ? cab.cotizacion_fuente : null,
+          cotizacion_fecha: cab.moneda === "USD" ? cab.cotizacion_fecha : null,
+          cotizacion_es_manual: cab.moneda === "USD" ? cab.cotizacion_es_manual : false,
           tipo_pago: cab.tipo_pago,
           plazo_dias: cab.tipo_pago === "credito" && cab.plazo_dias ? parseInt(cab.plazo_dias) : undefined,
           observacion: cab.observacion.trim() || null,
@@ -247,10 +256,21 @@ export default function NuevaOrdenCompraPage() {
               </select>
             </div>
             {cab.moneda === "USD" && (
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-600">Tipo de cambio</label>
-                <input type="number" min={0} value={cab.tipo_cambio} onChange={(e) => setCab((p) => ({ ...p, tipo_cambio: e.target.value }))} placeholder="Ej: 7300" className={inputClass} />
-              </div>
+              <TipoCambioField
+                value={{
+                  tipo_cambio: Number(cab.tipo_cambio) || 0,
+                  cotizacion_fuente: cab.cotizacion_fuente,
+                  cotizacion_fecha: cab.cotizacion_fecha,
+                  cotizacion_es_manual: cab.cotizacion_es_manual,
+                }}
+                onChange={(v) => setCab((p) => ({
+                  ...p,
+                  tipo_cambio: v.tipo_cambio > 0 ? String(v.tipo_cambio) : "",
+                  cotizacion_fuente: v.cotizacion_fuente,
+                  cotizacion_fecha: v.cotizacion_fecha,
+                  cotizacion_es_manual: v.cotizacion_es_manual,
+                }))}
+              />
             )}
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-600">Tipo de pago</label>

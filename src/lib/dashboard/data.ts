@@ -74,6 +74,12 @@ export interface LineaVentaRaw {
   subtotal: number;
   monto_iva?: number;
   total: number;
+  /** venta | muestra | regalo. Las dos últimas salen a precio cero. */
+  tipo_salida?: string;
+  /** Costo congelado al momento de la venta; 0 en ventas anteriores al snapshot. */
+  costo_total_snapshot_pyg?: number;
+  /** total_linea − costo_total_snapshot_pyg, congelada. Negativa en muestras/regalos. */
+  ganancia_pyg?: number;
 }
 
 export interface VentaRaw {
@@ -450,6 +456,9 @@ export async function getDashboardData(): Promise<DashboardData> {
         subtotal: Number(r.subtotal) ?? 0,
         monto_iva: Number(r.monto_iva) ?? 0,
         total: Number(r.total_linea) ?? 0,
+        tipo_salida: (r.tipo_salida as string) ?? "venta",
+        costo_total_snapshot_pyg: Number(r.costo_total_snapshot_pyg ?? 0),
+        ganancia_pyg: Number(r.ganancia_pyg ?? 0),
       });
       itemsByVenta.set(ventaId, lineas);
     }

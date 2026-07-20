@@ -43,8 +43,12 @@ function esc(v: unknown): string {
  * Membrete A4: logo a la izquierda, datos comerciales a la derecha, línea divisoria.
  * `origin` opcional para URL absoluta del logo (útil al imprimir/guardar PDF).
  */
-export function membreteA4(origin = ""): string {
-  const e = EMPRESA_DOC;
+export function membreteA4(origin = "", nombreOverride?: string | null): string {
+  // `nombreOverride` permite que el documento imprima el nombre resuelto contra
+  // la tabla `empresas` en vez del que sale del env. Sin esto, un documento que
+  // muestre el nombre por su cuenta (p. ej. el PDF de presupuesto) puede quedar
+  // con DOS nombres distintos si el env está vacío y la tabla tiene otro valor.
+  const e = { ...EMPRESA_DOC, nombre: (nombreOverride ?? "").trim() || EMPRESA_DOC.nombre };
   const logo = e.logoUrl ? (origin ? `${origin}${e.logoUrl}` : e.logoUrl) : "";
   return `
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:18px;border-bottom:2px solid #2E7D32;padding-bottom:12px;margin-bottom:16px;">

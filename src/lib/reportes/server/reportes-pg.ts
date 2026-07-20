@@ -31,6 +31,8 @@ import type {
   ConciliacionReporte,
   ConciliacionAgrupado,
   ConciliacionMovRow,
+  MuestrasReporte,
+  MuestraAgrupado,
 } from "@/lib/reportes/types";
 
 function pool() {
@@ -364,8 +366,29 @@ export async function getReporteVentas(
        FROM ${tVI} vi JOIN ${tV} v ON v.id=vi.venta_id WHERE ${perVActivas}
       ORDER BY v.fecha DESC, v.numero_control DESC`, args);
 
-  const [tot, itemsTot, tipoPrecio, porProd, ventas, items] = await Promise.all([
-    totQ, itemsTotQ, tipoPrecioQ, porProdQ, ventasQ, itemsQ]);
+  // Rentabilidad: se apoya en los snapshots de la línea (costo congelado al
+  // momento de la venta), NO en el costo actual del producto. Las muestras y
+  // regalos entran con ingreso 0 y costo real, así que restan ganancia.
+  const rentTotQ = p.query<{ ingresos: number; costo_vendido: number; costo_sin_cargo: number }>(
+    `SELECT COALESCE(SUM(vi.total_linea) FILTER (WHERE vi.tipo_salida = 'venta'),0)::float8 AS ingresos,
+            COALESCE(SUM(vi.costo_total_snapshot_pyg) FILTER (WHERE vi.tipo_salida = 'venta'),0)::float8 AS costo_vendido,
+            COALESCE(SUM(vi.costo_total_snapshot_pyg) FILTER (WHERE vi.tipo_salida <> 'venta'),0)::float8 AS costo_sin_cargo
+       FROM ${tVI} vi JOIN ${tV} v ON v.id=vi.venta_id WHERE ${perVActivas}`, args);
+
+  const rentProdQ = p.query<{
+    producto_nombre: string; cantidad: number; ingresos: number; costo: number; ganancia: number;
+  }>(
+    `SELECT vi.producto_nombre,
+            COALESCE(SUM(vi.cantidad),0)::float8 AS cantidad,
+            COALESCE(SUM(vi.total_linea),0)::float8 AS ingresos,
+            COALESCE(SUM(vi.costo_total_snapshot_pyg),0)::float8 AS costo,
+            COALESCE(SUM(vi.ganancia_pyg),0)::float8 AS ganancia
+       FROM ${tVI} vi JOIN ${tV} v ON v.id=vi.venta_id WHERE ${perVActivas}
+      GROUP BY vi.producto_id, vi.producto_nombre
+      ORDER BY ganancia DESC`, args);
+
+  const [tot, itemsTot, tipoPrecio, porProd, ventas, items, rentTot, rentProd] = await Promise.all([
+    totQ, itemsTotQ, tipoPrecioQ, porProdQ, ventasQ, itemsQ, rentTotQ, rentProdQ]);
 
   const cantidadVentas = num(tot.rows[0]?.ventas);
   const totalVendido = num(tot.rows[0]?.total);
@@ -409,6 +432,31 @@ export async function getReporteVentas(
       total_linea: num(i.total_linea),
       tipo_precio: normTipoPrecio(i.tipo_precio),
     })),
+    rentabilidad: (() => {
+      const ingresos = num(rentTot.rows[0]?.ingresos);
+      const costoVendido = num(rentTot.rows[0]?.costo_vendido);
+      const costoSinCargo = num(rentTot.rows[0]?.costo_sin_cargo);
+      const gananciaBruta = ingresos - costoVendido - costoSinCargo;
+      return {
+        ingresos,
+        costoVendido,
+        costoSinCargo,
+        gananciaBruta,
+        margenBruto: ingresos > 0 ? (gananciaBruta / ingresos) * 100 : 0,
+        porProducto: rentProd.rows.map((r) => {
+          const ing = num(r.ingresos);
+          const gan = num(r.ganancia);
+          return {
+            producto_nombre: r.producto_nombre,
+            cantidad: num(r.cantidad),
+            ingresos: ing,
+            costo: num(r.costo),
+            ganancia: gan,
+            margen: ing > 0 ? (gan / ing) * 100 : 0,
+          };
+        }),
+      };
+    })(),
   };
 }
 
@@ -499,5 +547,170 @@ export async function getReporteConciliacion(
     porMetodo: porMetodo.rows.map((r) => ({ clave: r.clave, cantidad: num(r.cantidad), total: num(r.total) })),
     porEntidad: porEntidad.rows.map((r) => ({ clave: r.clave, cantidad: num(r.cantidad), total: num(r.total) })),
     movimientos,
+  };
+}
+
+// ── Muestras y regalos ────────────────────────────────────────────────────────
+
+export interface MuestrasFiltros {
+  desde: string;   // timestamptz (límite inferior, ya ajustado a Asunción)
+  hasta: string;   // timestamptz (límite superior)
+  tipo?: "muestra" | "regalo" | null;
+  producto?: string | null;  // nombre exacto
+  cliente?: string | null;
+  usuario?: string | null;
+}
+
+/**
+ * Reporte de productos entregados sin cargo (muestras y regalos).
+ *
+ * Los importes salen de los SNAPSHOTS guardados en la línea al momento de la
+ * salida (`costo_unitario_snapshot_pyg`, `costo_total_snapshot_pyg`), no del
+ * costo actual del producto: un reporte de marzo no cambia porque en julio
+ * subió el costo. El `valor_comercial` sí usa el precio de lista de hoy, porque
+ * es una referencia de "cuánto habría facturado", no un importe histórico.
+ *
+ * Las ventas anuladas quedan fuera: no se entregó nada.
+ */
+export async function getReporteMuestras(
+  schemaRaw: string,
+  empresaId: string,
+  f: MuestrasFiltros
+): Promise<MuestrasReporte> {
+  const schema = assertAllowedChatDataSchema(schemaRaw);
+  const tVI = quoteSchemaTable(schema, "ventas_items");
+  const tV = quoteSchemaTable(schema, "ventas");
+  const tCli = quoteSchemaTable(schema, "clientes");
+  const tProd = quoteSchemaTable(schema, "productos");
+  const p = pool();
+
+  // $1 empresa, $2 desde, $3 hasta, $4 tipo, $5 producto, $6 cliente, $7 usuario.
+  // Los filtros opcionales usan el patrón "$n IS NULL OR col = $n" para no armar
+  // SQL dinámico: la consulta es siempre la misma y va parametrizada.
+  const args = [
+    empresaId, f.desde, f.hasta,
+    f.tipo ?? null, f.producto ?? null, f.cliente ?? null, f.usuario ?? null,
+  ];
+
+  const where = `
+      vi.empresa_id = $1::uuid
+      AND vi.tipo_salida <> 'venta'
+      AND v.fecha >= $2::timestamptz AND v.fecha <= $3::timestamptz
+      AND COALESCE(v.estado, 'completada') <> 'anulada'
+      AND ($4::text IS NULL OR vi.tipo_salida = $4::text)
+      AND ($5::text IS NULL OR vi.producto_nombre = $5::text)
+      AND ($6::text IS NULL OR COALESCE(c.nombre, 'Sin cliente') = $6::text)
+      AND ($7::text IS NULL OR COALESCE(v.usuario_nombre, 'Sin usuario') = $7::text)`;
+
+  const base = `
+    FROM ${tVI} vi
+    JOIN ${tV} v ON v.id = vi.venta_id
+    LEFT JOIN ${tCli} c ON c.id = v.cliente_id AND c.empresa_id = v.empresa_id
+    LEFT JOIN ${tProd} pr ON pr.id = vi.producto_id AND pr.empresa_id = vi.empresa_id
+    WHERE ${where}`;
+
+  // Se calcula una sola vez y se reutiliza en todos los cortes, para que las
+  // sumas de cada agrupación coincidan con el total de cabecera.
+  const VALOR_COMERCIAL = `(vi.cantidad * COALESCE(pr.precio_venta, 0))`;
+
+  const totQ = p.query<{ unidades: number; lineas: number; costo: number; comercial: number }>(
+    `SELECT COALESCE(SUM(vi.cantidad),0)::float8 AS unidades,
+            count(*)::int AS lineas,
+            COALESCE(SUM(vi.costo_total_snapshot_pyg),0)::float8 AS costo,
+            COALESCE(SUM(${VALOR_COMERCIAL}),0)::float8 AS comercial
+     ${base}`, args);
+
+  const agrupado = (col: string) => p.query<{ clave: string; cantidad: number; costo: number; comercial: number }>(
+    `SELECT ${col} AS clave,
+            COALESCE(SUM(vi.cantidad),0)::float8 AS cantidad,
+            COALESCE(SUM(vi.costo_total_snapshot_pyg),0)::float8 AS costo,
+            COALESCE(SUM(${VALOR_COMERCIAL}),0)::float8 AS comercial
+     ${base}
+     GROUP BY ${col} ORDER BY cantidad DESC`, args);
+
+  const porTipoQ = agrupado("vi.tipo_salida");
+  const porProdQ = agrupado("vi.producto_nombre");
+  const porCliQ = agrupado("COALESCE(c.nombre, 'Sin cliente')");
+  const porUsuQ = agrupado("COALESCE(v.usuario_nombre, 'Sin usuario')");
+
+  const detalleQ = p.query<{
+    venta_id: string; numero_control: string | null; fecha: string; tipo_salida: string;
+    producto_id: string | null; producto_nombre: string; cliente: string | null;
+    usuario: string | null; motivo: string | null; cantidad: number;
+    costo_unitario: number; costo_total: number; valor_comercial: number;
+  }>(
+    `SELECT v.id AS venta_id, v.numero_control, v.fecha, vi.tipo_salida,
+            vi.producto_id, vi.producto_nombre,
+            c.nombre AS cliente, v.usuario_nombre AS usuario, vi.motivo_salida AS motivo,
+            vi.cantidad::float8 AS cantidad,
+            vi.costo_unitario_snapshot_pyg::float8 AS costo_unitario,
+            vi.costo_total_snapshot_pyg::float8 AS costo_total,
+            ${VALOR_COMERCIAL}::float8 AS valor_comercial
+     ${base}
+     ORDER BY v.fecha DESC, vi.producto_nombre`, args);
+
+  // Opciones de los selectores: se calculan SIN aplicar los filtros de
+  // producto/cliente/usuario, para que elegir uno no vacíe la lista de los otros.
+  const opcionesQ = p.query<{ productos: string[]; clientes: string[]; usuarios: string[] }>(
+    `SELECT
+       COALESCE(array_agg(DISTINCT vi.producto_nombre) FILTER (WHERE vi.producto_nombre IS NOT NULL), '{}') AS productos,
+       COALESCE(array_agg(DISTINCT COALESCE(c.nombre,'Sin cliente')), '{}') AS clientes,
+       COALESCE(array_agg(DISTINCT COALESCE(v.usuario_nombre,'Sin usuario')), '{}') AS usuarios
+     FROM ${tVI} vi
+     JOIN ${tV} v ON v.id = vi.venta_id
+     LEFT JOIN ${tCli} c ON c.id = v.cliente_id AND c.empresa_id = v.empresa_id
+     WHERE vi.empresa_id = $1::uuid
+       AND vi.tipo_salida <> 'venta'
+       AND v.fecha >= $2::timestamptz AND v.fecha <= $3::timestamptz
+       AND COALESCE(v.estado,'completada') <> 'anulada'`,
+    [empresaId, f.desde, f.hasta]);
+
+  const [tot, porTipo, porProd, porCli, porUsu, detalle, opciones] = await Promise.all([
+    totQ, porTipoQ, porProdQ, porCliQ, porUsuQ, detalleQ, opcionesQ]);
+
+  const mapAgr = (r: { clave: string; cantidad: number; costo: number; comercial: number }): MuestraAgrupado => ({
+    clave: r.clave,
+    cantidad: num(r.cantidad),
+    costo: num(r.costo),
+    valorComercial: num(r.comercial),
+  });
+  const vacio = (clave: string): MuestraAgrupado => ({ clave, cantidad: 0, costo: 0, valorComercial: 0 });
+  const buscarTipo = (t: string) => {
+    const row = porTipo.rows.find((r) => r.clave === t);
+    return row ? mapAgr(row) : vacio(t);
+  };
+
+  const o = opciones.rows[0];
+  return {
+    desde: f.desde,
+    hasta: f.hasta,
+    unidadesTotal: num(tot.rows[0]?.unidades),
+    lineasTotal: num(tot.rows[0]?.lineas),
+    costoTotal: num(tot.rows[0]?.costo),
+    valorComercialTotal: num(tot.rows[0]?.comercial),
+    porTipo: { muestra: buscarTipo("muestra"), regalo: buscarTipo("regalo") },
+    porProducto: porProd.rows.map(mapAgr),
+    porCliente: porCli.rows.map(mapAgr),
+    porUsuario: porUsu.rows.map(mapAgr),
+    detalle: detalle.rows.map((r) => ({
+      venta_id: r.venta_id,
+      numero_control: r.numero_control || null,
+      fecha: r.fecha,
+      tipo_salida: r.tipo_salida === "regalo" ? "regalo" : "muestra",
+      producto_id: r.producto_id || null,
+      producto_nombre: r.producto_nombre,
+      cliente: r.cliente || null,
+      usuario: r.usuario || null,
+      motivo: r.motivo || null,
+      cantidad: num(r.cantidad),
+      costo_unitario: num(r.costo_unitario),
+      costo_total: num(r.costo_total),
+      valor_comercial: num(r.valor_comercial),
+    })),
+    opciones: {
+      productos: (o?.productos ?? []).slice().sort(),
+      clientes: (o?.clientes ?? []).slice().sort(),
+      usuarios: (o?.usuarios ?? []).slice().sort(),
+    },
   };
 }

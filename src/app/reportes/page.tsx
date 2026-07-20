@@ -2,7 +2,7 @@
 
 import PageHeader from "@/components/ui/PageHeader";
 import { ReportCard } from "@/components/reportes/ReportCard";
-import { Wallet, Truck, Package, ShoppingCart, ArrowLeftRight } from "lucide-react";
+import { Wallet, Truck, Package, ShoppingCart, ArrowLeftRight, Gift } from "lucide-react";
 
 /** Hub de reportería operativa (Fase 1: Estado de cuenta + Proveedores). */
 export default function ReportesPage() {
@@ -49,6 +49,15 @@ export default function ReportesPage() {
             icon={Truck}
             description="Resumen de proveedores, compras por proveedor y actividad del mes."
             href="/reportes/proveedores"
+          />
+        </li>
+        <li>
+          <ReportCard
+            title="Muestras y regalos"
+            subtitle="Entregas sin cargo y su costo"
+            icon={Gift}
+            description="Productos entregados como muestra o regalo, su costo real en guaraníes y el impacto en la ganancia."
+            href="/reportes/muestras"
           />
         </li>
         <li>

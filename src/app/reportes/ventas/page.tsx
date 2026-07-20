@@ -88,6 +88,56 @@ export default function VentasReportePage() {
             <StatCard compact label="Ítems vendidos" value={String(data.cantidadItems)} />
           </div>
 
+          {/* Rentabilidad: se calcula con el costo congelado en cada línea al
+              momento de la venta, no con el costo actual del producto. */}
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+            <h2 className="text-base font-semibold text-slate-800 mb-1">Rentabilidad</h2>
+            <p className="mb-4 text-xs text-slate-400">
+              Costos congelados al momento de cada venta. Las muestras y regalos restan su costo sin aportar ingreso.
+            </p>
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+              <StatCard compact label="Ingresos" value={formatGs(data.rentabilidad.ingresos)} />
+              <StatCard compact label="Costo vendido" value={formatGs(data.rentabilidad.costoVendido)} hint="mercadería facturada" />
+              <StatCard compact label="Costo sin cargo" value={formatGs(data.rentabilidad.costoSinCargo)} hint="muestras y regalos" />
+              <StatCard compact label="Ganancia bruta" value={formatGs(data.rentabilidad.gananciaBruta)} accent />
+              <StatCard compact label="Margen bruto" value={`${data.rentabilidad.margenBruto.toFixed(1)} %`} />
+            </div>
+
+            {data.rentabilidad.porProducto.length > 0 && (
+              <div className="mt-6 overflow-x-auto">
+                <h3 className="mb-3 text-sm font-semibold text-slate-700">Rentabilidad por producto</h3>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-400">
+                      <th className="pb-2 font-medium">Producto</th>
+                      <th className="pb-2 text-right font-medium">Cant.</th>
+                      <th className="pb-2 text-right font-medium">Ingresos</th>
+                      <th className="pb-2 text-right font-medium">Costo</th>
+                      <th className="pb-2 text-right font-medium">Ganancia</th>
+                      <th className="pb-2 text-right font-medium">Margen</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {data.rentabilidad.porProducto.map((r) => (
+                      <tr key={r.producto_nombre} className="hover:bg-slate-50/60">
+                        <td className="py-2 pr-3 text-slate-700">{r.producto_nombre}</td>
+                        <td className="py-2 text-right tabular-nums text-slate-600">{r.cantidad.toLocaleString("es-PY")}</td>
+                        <td className="py-2 pl-3 text-right tabular-nums text-slate-600">{formatGs(r.ingresos)}</td>
+                        <td className="py-2 pl-3 text-right tabular-nums text-slate-600">{formatGs(r.costo)}</td>
+                        <td className={`py-2 pl-3 text-right tabular-nums font-medium ${r.ganancia < 0 ? "text-red-600" : "text-slate-800"}`}>
+                          {formatGs(r.ganancia)}
+                        </td>
+                        <td className={`py-2 pl-3 text-right tabular-nums ${r.margen < 0 ? "text-red-600" : "text-slate-600"}`}>
+                          {r.margen.toFixed(1)} %
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
           {/* Desglose por tipo de precio */}
           <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
             <h2 className="text-base font-semibold text-slate-800 mb-4">Por tipo de precio</h2>

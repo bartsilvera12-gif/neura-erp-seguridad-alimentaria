@@ -1925,17 +1925,25 @@ const DashVentas = memo(function DashVentas({
     [productos]
   );
 
+  // Ganancia con el costo CONGELADO al momento de la venta (`ganancia_pyg`),
+  // no con el costo promedio de hoy: si mañana sube el costo del producto, la
+  // ganancia de ayer no debe cambiar. Las ventas viejas (anteriores al snapshot)
+  // caen al cálculo con el costo actual, que es lo único disponible para ellas.
   const gananciaHoy = useMemo(() =>
     ventasHoy.flatMap(v => v.lineas ?? []).reduce((s, l) => {
       if (!l) return s;
+      if (l.ganancia_pyg != null && l.costo_total_snapshot_pyg) return s + l.ganancia_pyg;
       const costo = prodMap[l.producto_id]?.costo_promedio ?? 0;
       return s + (l.precio_venta - costo) * l.cantidad;
     }, 0),
     [ventasHoy, prodMap]
   );
 
+  // Base del margen: solo lo efectivamente cobrado. Las muestras y regalos no
+  // suman ingreso (su costo ya restó en gananciaHoy), así que inflarían el
+  // denominador y hundirían el margen sin motivo.
   const totalHoyBruto = ventasHoy.flatMap(v => v.lineas ?? [])
-    .reduce((s, l) => s + (l ? l.precio_venta * l.cantidad : 0), 0);
+    .reduce((s, l) => s + (l && l.tipo_salida !== "muestra" && l.tipo_salida !== "regalo" ? l.precio_venta * l.cantidad : 0), 0);
 
   const margenProm = totalHoyBruto > 0 ? (gananciaHoy / totalHoyBruto) * 100 : 0;
 

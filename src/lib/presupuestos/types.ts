@@ -51,6 +51,8 @@ export interface Presupuesto {
   validez_dias: number | null;
   fecha: string;
   fecha_vencimiento: string | null;
+  /** Día pactado de entrega. Se guardaba al crear pero el detalle no lo devolvía. */
+  fecha_entrega: string | null;
   forma_pago: string | null;
   plazo_entrega: string | null;
   observaciones: string | null;

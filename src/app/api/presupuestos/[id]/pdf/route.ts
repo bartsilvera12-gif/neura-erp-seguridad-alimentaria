@@ -198,11 +198,10 @@ export async function GET(request: NextRequest, ctxParams: { params: Promise<{ i
 <body>
   <div class="toolbar"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
   <div class="page">
-    ${membreteA4()}
+    ${membreteA4("", negocio)}
     <div class="head">
       <div>
         <div class="negocio">PRESUPUESTO</div>
-        <div class="doc-tag">${esc(negocio)}</div>
       </div>
       <div class="meta">
         <div class="num">${esc(p.numero_control)}</div>

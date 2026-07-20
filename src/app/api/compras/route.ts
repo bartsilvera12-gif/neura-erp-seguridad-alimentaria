@@ -66,6 +66,16 @@ export async function POST(request: NextRequest) {
         ? metodoPagoRaw
         : null;
 
+    // Una compra en USD con tipo de cambio 1 registraría dólares como si fueran
+    // guaraníes y envenenaría el costo promedio. Se rechaza explícitamente en
+    // vez de caer al default de 1.
+    if (body.moneda === "USD" && !(Number(body.tipo_cambio) > 1)) {
+      return NextResponse.json(
+        errorResponse("Cargá el tipo de cambio (USD → Gs.). No se puede registrar una compra en dólares sin cotización."),
+        { status: 400 }
+      );
+    }
+
     const header: CompraHeaderInput = {
       proveedor_id: String(body.proveedor_id),
       proveedor_nombre: String(body.proveedor_nombre ?? ""),

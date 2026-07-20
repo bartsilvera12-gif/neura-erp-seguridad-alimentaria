@@ -73,6 +73,8 @@ export default function NuevoPresupuestoPage() {
   const [clienteRuc, setClienteRuc] = useState("");
   const [clienteTel, setClienteTel] = useState("");
   const [clienteDir, setClienteDir] = useState("");
+  const [creandoCliente, setCreandoCliente] = useState(false);
+  const [errorCliente, setErrorCliente] = useState<string | null>(null);
 
   // Items
   const [items, setItems] = useState<Item[]>([]);
@@ -143,6 +145,63 @@ export default function NuevoPresupuestoPage() {
       setClienteRuc(c.ruc || c.documento || "");
       setClienteTel(c.telefono ?? "");
       setClienteDir(c.direccion ?? "");
+    }
+  }
+
+  /**
+   * Da de alta el cliente cargado a mano y lo deja seleccionado. Reutiliza el
+   * mismo endpoint que la pantalla de clientes, así el registro nace idéntico
+   * a los creados desde ahí (mismos defaults, mismas validaciones).
+   */
+  async function crearCliente() {
+    const nombre = clienteNombre.trim();
+    if (!nombre) return;
+    setCreandoCliente(true);
+    setErrorCliente(null);
+    try {
+      const ruc = clienteRuc.trim();
+      const res = await fetchWithSupabaseSession("/api/clientes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tipo_cliente: "empresa",
+          empresa: nombre,
+          // El endpoint exige `nombre_contacto`; sin un contacto aparte, el
+          // nombre de la empresa cumple ese rol.
+          nombre_contacto: nombre,
+          // Un RUC paraguayo lleva guion verificador; sin él es una CI.
+          ruc: ruc.includes("-") ? ruc : null,
+          documento: ruc && !ruc.includes("-") ? ruc : null,
+          telefono: clienteTel.trim() || null,
+          direccion: clienteDir.trim() || null,
+          nivel_precio: "minorista",
+          estado: "activo",
+        }),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        data?: { id?: string };
+        error?: string;
+      };
+      if (!res.ok || !j.success || !j.data?.id) {
+        setErrorCliente(j.error ?? "No se pudo crear el cliente.");
+        return;
+      }
+      const nuevo: ClienteLite = {
+        id: String(j.data.id),
+        nombre,
+        ruc: ruc.includes("-") ? ruc : null,
+        documento: ruc && !ruc.includes("-") ? ruc : null,
+        telefono: clienteTel.trim() || null,
+        direccion: clienteDir.trim() || null,
+        nivel_precio: "minorista",
+      };
+      setClientes((prev) => [...prev, nuevo]);
+      setClienteId(nuevo.id);
+    } catch {
+      setErrorCliente("No se pudo crear el cliente.");
+    } finally {
+      setCreandoCliente(false);
     }
   }
 
@@ -302,6 +361,27 @@ export default function NuevoPresupuestoPage() {
             <input value={clienteDir} onChange={(e) => setClienteDir(e.target.value)} className={inputClass} />
           </div>
         </div>
+
+        {/* Alta de cliente sin salir del presupuesto. Solo aparece cuando el
+            nombre se cargó a mano (no hay cliente_id): si ya se eligió uno
+            existente, no hay nada que crear. */}
+        {!clienteId && clienteNombre.trim() !== "" && (
+          <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p className="flex-1 text-xs text-slate-500">
+              Este cliente no está en la base. Podés guardarlo para reutilizarlo en próximos
+              presupuestos y ventas.
+            </p>
+            <button
+              type="button"
+              onClick={crearCliente}
+              disabled={creandoCliente}
+              className="rounded-lg bg-[#4FAEB2] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#3F8E91] disabled:opacity-50"
+            >
+              {creandoCliente ? "Guardando…" : "Guardar como cliente"}
+            </button>
+          </div>
+        )}
+        {errorCliente && <p className="mt-2 text-xs text-red-600">{errorCliente}</p>}
       </div>
 
       {/* Productos */}

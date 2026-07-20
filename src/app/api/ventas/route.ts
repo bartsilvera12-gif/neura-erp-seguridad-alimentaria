@@ -31,10 +31,17 @@ interface VentaItemRow {
   subtotal: number | string;
   monto_iva: number | string;
   total_linea: number | string;
+  tipo_salida?: string | null;
+  motivo_salida?: string | null;
+  costo_unitario_snapshot_pyg?: number | string | null;
+  costo_total_snapshot_pyg?: number | string | null;
+  ganancia_pyg?: number | string | null;
 }
 
-function num(v: number | string): number {
-  return typeof v === "number" ? v : Number(v);
+function num(v: number | string | null | undefined): number {
+  if (v == null) return 0;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function mapItems(rows: VentaItemRow[]): LineaVenta[] {
@@ -50,6 +57,13 @@ function mapItems(rows: VentaItemRow[]): LineaVenta[] {
     subtotal: num(r.subtotal),
     monto_iva: num(r.monto_iva),
     total_linea: num(r.total_linea),
+    // Snapshots de costo/ganancia congelados al vender. El dashboard los usa
+    // para no recalcular historicos con el costo actual del producto.
+    tipo_salida: (r.tipo_salida === "muestra" || r.tipo_salida === "regalo" ? r.tipo_salida : "venta") as LineaVenta["tipo_salida"],
+    motivo_salida: r.motivo_salida ?? null,
+    costo_unitario_snapshot_pyg: num(r.costo_unitario_snapshot_pyg ?? 0),
+    costo_total_snapshot_pyg: num(r.costo_total_snapshot_pyg ?? 0),
+    ganancia_pyg: num(r.ganancia_pyg ?? 0),
   }));
 }
 
@@ -142,7 +156,7 @@ export async function GET(request: NextRequest) {
     const itemsQ = await ctx.supabase
       .from("ventas_items")
       .select(
-        "venta_id, producto_id, producto_nombre, sku, cantidad, precio_venta_original, precio_venta, tipo_iva, tipo_precio, subtotal, monto_iva, total_linea"
+        "venta_id, producto_id, producto_nombre, sku, cantidad, precio_venta_original, precio_venta, tipo_iva, tipo_precio, subtotal, monto_iva, total_linea, tipo_salida, motivo_salida, costo_unitario_snapshot_pyg, costo_total_snapshot_pyg, ganancia_pyg"
       )
       .eq("empresa_id", empresaId);
     if (itemsQ.error) throw new Error(itemsQ.error.message);

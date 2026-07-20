@@ -32,6 +32,9 @@ export interface OrdenCompraRow {
   cantidad_recibida: string | number;
   moneda: string;
   tipo_cambio: string | number;
+  cotizacion_fuente: string | null;
+  cotizacion_fecha: string | null;
+  cotizacion_es_manual: boolean;
   costo_unitario_original: string | number;
   costo_unitario: string | number;
   iva_tipo: string;
@@ -58,6 +61,7 @@ export interface OrdenCompraRow {
 const COLS = `
   id, empresa_id, numero_oc, proveedor_id, proveedor_nombre, producto_id, producto_nombre,
   cantidad, cantidad_recibida, moneda, tipo_cambio, costo_unitario_original, costo_unitario,
+  cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual,
   iva_tipo, subtotal, monto_iva, total, precio_venta, margen_venta,
   tipo_pago, plazo_dias, estado, observacion,
   compra_numero_control, recibida_at, cancelada_at, cancelada_motivo,
@@ -69,6 +73,10 @@ export interface OrdenCompraHeaderInput {
   proveedor_nombre: string;
   moneda: string;
   tipo_cambio: number;
+  /** Snapshot de la cotizacion usada. Solo aplica cuando moneda = USD. */
+  cotizacion_fuente?: string | null;
+  cotizacion_fecha?: string | null;
+  cotizacion_es_manual?: boolean;
   tipo_pago: string;
   plazo_dias: number | null;
   observacion: string | null;
@@ -169,12 +177,14 @@ export async function insertOrdenCompra(
            empresa_id, numero_oc, proveedor_id, proveedor_nombre, producto_id, producto_nombre,
            cantidad, moneda, tipo_cambio, costo_unitario_original, costo_unitario,
            iva_tipo, subtotal, monto_iva, total, precio_venta, margen_venta,
-           tipo_pago, plazo_dias, estado, observacion, fecha, created_by, usuario_nombre
+           tipo_pago, plazo_dias, estado, observacion, fecha, created_by, usuario_nombre,
+           cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual
          ) VALUES (
            $1::uuid, $2, $3::uuid, $4, $5::uuid, $6,
            $7::numeric, $8, $9::numeric, $10::numeric, $11::numeric,
            $12, $13::numeric, $14::numeric, $15::numeric, $16::numeric, $17::numeric,
-           $18, $19::integer, 'pendiente', $20, now(), $21::uuid, $22
+           $18, $19::integer, 'pendiente', $20, now(), $21::uuid, $22,
+           $23, $24::timestamptz, $25::boolean
          )
          RETURNING ${COLS}`,
         [
@@ -185,6 +195,10 @@ export async function insertOrdenCompra(
           it.iva_tipo, it.subtotal, it.monto_iva, it.total, it.precio_venta, it.margen_venta,
           header.tipo_pago, header.plazo_dias, header.observacion,
           header.created_by, header.usuario_nombre,
+          // Una orden en PYG no tiene cotizacion que auditar.
+          header.moneda === "USD" ? header.cotizacion_fuente ?? null : null,
+          header.moneda === "USD" ? header.cotizacion_fecha ?? null : null,
+          header.moneda === "USD" ? header.cotizacion_es_manual === true : false,
         ]
       );
       inserted.push(rows[0]);
@@ -402,6 +416,12 @@ export async function confirmarRecepcionOrdenCompra(
       proveedor_nombre: cab.proveedor_nombre,
       moneda: cab.moneda === "USD" ? "USD" : "PYG",
       tipo_cambio: num(cab.tipo_cambio) || 1,
+      // La compra hereda la cotización PACTADA EN LA ORDEN, no la de hoy: el
+      // costo en PYG que se contabiliza es el que se acordó al pedir, aunque la
+      // mercadería llegue semanas después con otro dólar.
+      cotizacion_fuente: cab.cotizacion_fuente ?? null,
+      cotizacion_fecha: cab.cotizacion_fecha ?? null,
+      cotizacion_es_manual: cab.cotizacion_es_manual === true,
       tipo_pago: params.tipoPago === "credito" ? "credito" : "contado",
       plazo_dias: params.plazoDias,
       nro_timbrado: params.nroTimbrado.trim().toUpperCase(),

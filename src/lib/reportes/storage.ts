@@ -1,4 +1,4 @@
-import type { EstadoCuentaReporte, ProveedoresReporte, ComprasReporte, VentasReporte, ConciliacionReporte } from "./types";
+import type { EstadoCuentaReporte, ProveedoresReporte, ComprasReporte, VentasReporte, ConciliacionReporte, MuestrasReporte } from "./types";
 
 async function getReporte<T>(url: string): Promise<T | null> {
   try {
@@ -24,3 +24,20 @@ export const getVentasReporte = (mes: string) =>
   getReporte<VentasReporte>(`/api/reportes/ventas?mes=${mq(mes)}`);
 export const getConciliacionReporte = (mes: string) =>
   getReporte<ConciliacionReporte>(`/api/reportes/conciliacion?mes=${mq(mes)}`);
+
+/** Muestras y regalos: rango libre de fechas + filtros opcionales. */
+export const getMuestrasReporte = (f: {
+  desde: string;
+  hasta: string;
+  tipo?: string;
+  producto?: string;
+  cliente?: string;
+  usuario?: string;
+}) => {
+  const qs = new URLSearchParams({ desde: f.desde, hasta: f.hasta });
+  for (const k of ["tipo", "producto", "cliente", "usuario"] as const) {
+    const v = f[k];
+    if (v) qs.set(k, v);
+  }
+  return getReporte<MuestrasReporte>(`/api/reportes/muestras?${qs.toString()}`);
+};

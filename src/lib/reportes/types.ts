@@ -162,6 +162,36 @@ export interface VentasReporte {
   porProducto: VentaProductoTotal[];
   ventas: VentaReporteRow[];
   items: ItemVendidoRow[];
+  /** Rentabilidad del período, calculada con los snapshots de costo de cada línea. */
+  rentabilidad: RentabilidadReporte;
+}
+
+/**
+ * Rentabilidad del período. Todo en PYG y sobre snapshots congelados al momento
+ * de la venta: un reporte cerrado no cambia porque hoy varió el costo del producto.
+ */
+export interface RentabilidadReporte {
+  /** Ingresos de líneas cobradas (las muestras/regalos aportan cero). */
+  ingresos: number;
+  /** Costo de la mercadería efectivamente vendida (líneas tipo 'venta'). */
+  costoVendido: number;
+  /** Costo de lo entregado sin cargo. Resta ganancia sin aportar ingreso. */
+  costoSinCargo: number;
+  /** ingresos − costoVendido − costoSinCargo. */
+  gananciaBruta: number;
+  /** gananciaBruta / ingresos, en porcentaje. 0 si no hubo ingresos. */
+  margenBruto: number;
+  porProducto: RentabilidadProductoRow[];
+}
+
+export interface RentabilidadProductoRow {
+  producto_nombre: string;
+  cantidad: number;
+  ingresos: number;
+  costo: number;
+  ganancia: number;
+  /** ganancia / ingresos en %. 0 si el producto solo salió sin cargo. */
+  margen: number;
 }
 
 // ── Conciliación bancaria (ventas_pagos_detalle, venta-céntrico) ──────────────
@@ -198,4 +228,52 @@ export interface ConciliacionReporte {
   porMetodo: ConciliacionAgrupado[];
   porEntidad: ConciliacionAgrupado[];
   movimientos: ConciliacionMovRow[];
+}
+
+// ── Muestras y regalos (ventas_items.tipo_salida <> 'venta') ──────────────────
+
+/** Agrupador reutilizable: producto más regalado, cliente que más recibió, etc. */
+export interface MuestraAgrupado {
+  clave: string;
+  cantidad: number;      // unidades entregadas
+  costo: number;         // costo real en PYG (snapshot)
+  valorComercial: number; // lo que habría facturado a precio de lista
+}
+
+/** Una línea entregada sin cargo. Los importes son snapshots del momento de la salida. */
+export interface MuestraRow {
+  venta_id: string;
+  numero_control: string | null;
+  fecha: string;
+  tipo_salida: "muestra" | "regalo";
+  producto_id: string | null;
+  producto_nombre: string;
+  cliente: string | null;
+  usuario: string | null;
+  motivo: string | null;
+  cantidad: number;
+  costo_unitario: number;
+  costo_total: number;
+  /** Precio de lista vigente HOY × cantidad. Referencia comercial, no es un ingreso. */
+  valor_comercial: number;
+}
+
+export interface MuestrasReporte {
+  desde: string;
+  hasta: string;
+  /** Unidades entregadas sin cargo en el período. */
+  unidadesTotal: number;
+  /** Operaciones (líneas) sin cargo. */
+  lineasTotal: number;
+  /** Costo real entregado, en PYG. Es el impacto negativo en la ganancia. */
+  costoTotal: number;
+  /** Valor comercial que habrían tenido esas unidades (referencia, no ingreso). */
+  valorComercialTotal: number;
+  porTipo: { muestra: MuestraAgrupado; regalo: MuestraAgrupado };
+  porProducto: MuestraAgrupado[];
+  porCliente: MuestraAgrupado[];
+  porUsuario: MuestraAgrupado[];
+  detalle: MuestraRow[];
+  /** Opciones para poblar los selectores de filtro (del período consultado). */
+  opciones: { productos: string[]; clientes: string[]; usuarios: string[] };
 }

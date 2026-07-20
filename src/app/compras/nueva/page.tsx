@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import TipoCambioField from "@/components/compras/TipoCambioField";
 import MontoInput from "@/components/ui/MontoInput";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 import { saveCompraMulti, uploadComprobante, type CompraItemPayload } from "@/lib/compras/storage";
@@ -102,6 +103,11 @@ export default function NuevaCompraPage() {
     plazo_dias: "",
     moneda: "PYG" as Moneda,
     tipo_cambio: "",
+    // Snapshot de la cotizacion usada. Se guarda con la compra para que un
+    // costo historico en USD nunca se reinterprete con el cambio de hoy.
+    cotizacion_fuente: null as string | null,
+    cotizacion_fecha: null as string | null,
+    cotizacion_es_manual: false,
     fecha_factura: "" as string,
     metodo_pago: "" as "" | "efectivo" | "transferencia" | "tarjeta",
   });
@@ -282,6 +288,9 @@ export default function NuevaCompraPage() {
           nro_timbrado: cab.nro_timbrado,
           fecha_factura: cab.fecha_factura || null,
           metodo_pago: cab.metodo_pago || null,
+          cotizacion_fuente: cab.moneda === "USD" ? cab.cotizacion_fuente : null,
+          cotizacion_fecha: cab.moneda === "USD" ? cab.cotizacion_fecha : null,
+          cotizacion_es_manual: cab.moneda === "USD" ? cab.cotizacion_es_manual : false,
           comprobante_storage_path: comprobante?.comprobante_storage_path ?? null,
           comprobante_nombre: comprobante?.comprobante_nombre ?? null,
           comprobante_mime_type: comprobante?.comprobante_mime_type ?? null,
@@ -517,7 +526,7 @@ export default function NuevaCompraPage() {
                 <label className={labelClass}>Moneda</label>
                 <SegmentedControl<Moneda> value={cab.moneda}
                   options={[{ value: "PYG", label: "Guaraníes (₲)" }, { value: "USD", label: "Dólares (USD)" }]}
-                  onChange={(v) => setCab((p) => ({ ...p, moneda: v, tipo_cambio: "" }))} />
+                  onChange={(v) => setCab((p) => ({ ...p, moneda: v, tipo_cambio: "", cotizacion_fuente: null, cotizacion_fecha: null, cotizacion_es_manual: false }))} />
               </div>
               {cab.tipo_pago === "credito" && (
                 <div>
@@ -527,11 +536,21 @@ export default function NuevaCompraPage() {
                 </div>
               )}
               {cab.moneda === "USD" && (
-                <div>
-                  <label className={labelClass}>Tipo de cambio (USD → Gs.) <span className="text-red-500">*</span></label>
-                  <MontoInput value={cab.tipo_cambio} onChange={(n) => setCab((p) => ({ ...p, tipo_cambio: String(n) }))}
-                    placeholder="Ej: 7500" className={inputClass} decimals={false} />
-                </div>
+                <TipoCambioField
+                  value={{
+                    tipo_cambio: parseFloat(cab.tipo_cambio) || 0,
+                    cotizacion_fuente: cab.cotizacion_fuente,
+                    cotizacion_fecha: cab.cotizacion_fecha,
+                    cotizacion_es_manual: cab.cotizacion_es_manual,
+                  }}
+                  onChange={(v) => setCab((p) => ({
+                    ...p,
+                    tipo_cambio: v.tipo_cambio > 0 ? String(v.tipo_cambio) : "",
+                    cotizacion_fuente: v.cotizacion_fuente,
+                    cotizacion_fecha: v.cotizacion_fecha,
+                    cotizacion_es_manual: v.cotizacion_es_manual,
+                  }))}
+                />
               )}
             </div>
           </section>

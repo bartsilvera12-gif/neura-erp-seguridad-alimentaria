@@ -95,6 +95,10 @@ export interface OrdenHeaderPayload {
   tipo_pago: "contado" | "credito";
   plazo_dias?: number;
   observacion?: string | null;
+  /** Snapshot de la cotizacion usada. Solo se envia cuando moneda = USD. */
+  cotizacion_fuente?: string | null;
+  cotizacion_fecha?: string | null;
+  cotizacion_es_manual?: boolean;
 }
 
 interface OkOrden { success: true; numero_oc: string; ordenes: OrdenCompra[]; }

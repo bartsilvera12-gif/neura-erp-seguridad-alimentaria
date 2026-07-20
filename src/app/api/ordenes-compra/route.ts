@@ -36,6 +36,15 @@ export async function POST(request: NextRequest) {
     const req = (k: string) => body[k] != null && String(body[k]).trim() !== "";
     if (!req("proveedor_id")) return NextResponse.json(errorResponse("Falta el proveedor."), { status: 400 });
 
+    // Ídem compras: una OC en dólares con cambio 1 pactaría costos en PYG que en
+    // realidad son USD, y ese error se arrastra hasta el stock al recibir.
+    if (body.moneda === "USD" && !(Number(body.tipo_cambio) > 1)) {
+      return NextResponse.json(
+        errorResponse("Cargá el tipo de cambio (USD → Gs.). No se puede crear una orden en dólares sin cotización."),
+        { status: 400 }
+      );
+    }
+
     const ivaOk = (v: unknown) =>
       ["exenta", "0", "5", "10"].includes(String(v)) ? (String(v) === "0" ? "exenta" : String(v)) : "10";
 
@@ -48,6 +57,13 @@ export async function POST(request: NextRequest) {
       proveedor_nombre: String(body.proveedor_nombre ?? ""),
       moneda: body.moneda === "USD" ? "USD" : "PYG",
       tipo_cambio: Number(body.tipo_cambio) || 1,
+      cotizacion_fuente:
+        body.cotizacion_fuente != null && String(body.cotizacion_fuente).trim() !== ""
+          ? String(body.cotizacion_fuente) : null,
+      cotizacion_fecha:
+        body.cotizacion_fecha != null && String(body.cotizacion_fecha).trim() !== ""
+          ? String(body.cotizacion_fecha) : null,
+      cotizacion_es_manual: body.cotizacion_es_manual === true,
       tipo_pago: body.tipo_pago === "credito" ? "credito" : "contado",
       plazo_dias:
         body.plazo_dias != null && String(body.plazo_dias).trim() !== ""

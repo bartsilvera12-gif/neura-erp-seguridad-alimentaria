@@ -1925,27 +1925,47 @@ const DashVentas = memo(function DashVentas({
     [productos]
   );
 
-  // Ganancia con el costo CONGELADO al momento de la venta (`ganancia_pyg`),
-  // no con el costo promedio de hoy: si mañana sube el costo del producto, la
-  // ganancia de ayer no debe cambiar. Las ventas viejas (anteriores al snapshot)
-  // caen al cálculo con el costo actual, que es lo único disponible para ellas.
-  const gananciaHoy = useMemo(() =>
-    ventasHoy.flatMap(v => v.lineas ?? []).reduce((s, l) => {
-      if (!l) return s;
-      if (l.ganancia_pyg != null && l.costo_total_snapshot_pyg) return s + l.ganancia_pyg;
-      const costo = prodMap[l.producto_id]?.costo_promedio ?? 0;
-      return s + (l.precio_venta - costo) * l.cantidad;
-    }, 0),
-    [ventasHoy, prodMap]
-  );
-
-  // Base del margen: solo lo efectivamente cobrado. Las muestras y regalos no
-  // suman ingreso (su costo ya restó en gananciaHoy), así que inflarían el
-  // denominador y hundirían el margen sin motivo.
-  const totalHoyBruto = ventasHoy.flatMap(v => v.lineas ?? [])
-    .reduce((s, l) => s + (l && l.tipo_salida !== "muestra" && l.tipo_salida !== "regalo" ? l.precio_venta * l.cantidad : 0), 0);
-
-  const margenProm = totalHoyBruto > 0 ? (gananciaHoy / totalHoyBruto) * 100 : 0;
+  // Rentabilidad del PERÍODO seleccionado (no solo de hoy: si hoy no se vendió,
+  // "hoy" da cero y el dashboard parece inútil). Usa el costo CONGELADO en cada
+  // línea al momento de la venta (`ganancia_pyg` / `costo_total_snapshot_pyg`):
+  // si mañana sube el costo del producto, la ganancia de ayer no cambia. Las
+  // ventas anteriores al snapshot caen al costo actual, lo único que tienen.
+  // Las muestras y regalos no suman ingreso pero su costo sí resta (ya viene
+  // reflejado en `ganancia_pyg`, que es negativa para ellas).
+  const rentabilidad = useMemo(() => {
+    let vendido = 0;   // total cobrado (con IVA incluido), lo que "entró"
+    let baseSinIva = 0; // subtotal sin IVA — base coherente para el margen
+    let costo = 0;
+    let ganancia = 0;
+    for (const v of ventasFilt) {
+      for (const l of v.lineas ?? []) {
+        if (!l) continue;
+        const sinCargo = l.tipo_salida === "muestra" || l.tipo_salida === "regalo";
+        if (!sinCargo) {
+          vendido += l.total;        // total_linea
+          baseSinIva += l.subtotal;
+        }
+        // La columna de snapshot es NOT NULL DEFAULT 0: las ventas anteriores a
+        // esta función quedaron en 0, indistinguibles por `null`. Por eso el
+        // corte es `> 0`: un snapshot real siempre tiene costo; un 0 significa
+        // "venta vieja", y para esas se estima con el costo actual del producto,
+        // que es lo único disponible (mejor que contar toda la venta como ganancia).
+        const snapCosto = l.costo_total_snapshot_pyg ?? 0;
+        if (snapCosto > 0) {
+          costo += snapCosto;
+          ganancia += l.ganancia_pyg ?? 0;
+        } else {
+          const c = (prodMap[l.producto_id]?.costo_promedio ?? 0) * l.cantidad;
+          costo += c;
+          ganancia += (sinCargo ? 0 : l.subtotal) - c;
+        }
+      }
+    }
+    // Margen sobre la base sin IVA, misma base con la que se calculó la
+    // ganancia; usar el total con IVA lo subestimaría.
+    const margen = baseSinIva > 0 ? (ganancia / baseSinIva) * 100 : 0;
+    return { vendido, costo, ganancia, margen };
+  }, [ventasFilt, prodMap]);
 
   const topProductos = useMemo(() => {
     const map: Record<string, number> = {};
@@ -1992,21 +2012,33 @@ const DashVentas = memo(function DashVentas({
         <KpiTile icon={ShoppingBag} label="Unidades vendidas" value={formatGs(unidades)} sub="en el período" />
       </div>
 
-      {/* Rentabilidad del día */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      {/* Rentabilidad del período (con costos congelados al momento de cada venta) */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiTile
+          icon={ShoppingBag}
+          label="Vendido"
+          value={`Gs. ${formatGsFull(rentabilidad.vendido)}`}
+          sub={`período: ${periodo}`}
+        />
+        <KpiTile
+          icon={Package}
+          label="Costo de lo vendido"
+          value={`Gs. ${formatGsFull(rentabilidad.costo)}`}
+          sub="costo congelado al vender"
+        />
         <KpiTile
           icon={Coins}
-          label="Ganancia del día"
-          value={`Gs. ${formatGsFull(gananciaHoy)}`}
-          sub="precio venta − costo × cantidad"
-          tono={gananciaHoy >= 0 ? "success" : "danger"}
+          label="Ganancia"
+          value={`Gs. ${formatGsFull(rentabilidad.ganancia)}`}
+          sub="vendido − costo"
+          tono={rentabilidad.ganancia >= 0 ? "success" : "danger"}
         />
         <KpiTile
           icon={Percent}
-          label="Margen promedio (hoy)"
-          value={`${margenProm.toFixed(1)}%`}
-          sub="ganancia / precio de venta"
-          tono={margenProm >= 20 ? "success" : margenProm >= 10 ? "warn" : "danger"}
+          label="Margen"
+          value={`${rentabilidad.margen.toFixed(1)}%`}
+          sub="ganancia / venta sin IVA"
+          tono={rentabilidad.margen >= 20 ? "success" : rentabilidad.margen >= 10 ? "warn" : "danger"}
         />
       </div>
 

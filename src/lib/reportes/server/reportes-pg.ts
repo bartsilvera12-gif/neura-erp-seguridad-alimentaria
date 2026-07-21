@@ -318,6 +318,7 @@ export async function getReporteVentas(
   const tV = quoteSchemaTable(schema, "ventas");
   const tVI = quoteSchemaTable(schema, "ventas_items");
   const tCli = quoteSchemaTable(schema, "clientes");
+  const tProd = quoteSchemaTable(schema, "productos");
   const p = pool();
   const perV = `v.empresa_id=$1::uuid AND v.fecha>=$2::timestamptz AND v.fecha<=$3::timestamptz`;
   // Las ventas ANULADAS no cuentan en los agregados (totales, ítems, unidades, por producto,
@@ -369,21 +370,41 @@ export async function getReporteVentas(
   // Rentabilidad: se apoya en los snapshots de la línea (costo congelado al
   // momento de la venta), NO en el costo actual del producto. Las muestras y
   // regalos entran con ingreso 0 y costo real, así que restan ganancia.
-  const rentTotQ = p.query<{ ingresos: number; costo_vendido: number; costo_sin_cargo: number }>(
+  //
+  // Fallback: la columna de snapshot es NOT NULL DEFAULT 0, así que las ventas
+  // anteriores a la función de snapshot quedaron en 0. Para esas se estima el
+  // costo con el costo_promedio actual del producto (mismo criterio que el
+  // dashboard); un snapshot > 0 siempre gana. Sin esto, esas ventas mostrarían
+  // ganancia = venta completa, inflando el margen.
+  const COSTO_EFECTIVO =
+    `CASE WHEN vi.costo_total_snapshot_pyg > 0 THEN vi.costo_total_snapshot_pyg
+          ELSE COALESCE(pr.costo_promedio, 0) * vi.cantidad END`;
+  const GANANCIA_EFECTIVA =
+    `CASE WHEN vi.costo_total_snapshot_pyg > 0 THEN vi.ganancia_pyg
+          ELSE (CASE WHEN vi.tipo_salida = 'venta' THEN vi.subtotal ELSE 0 END)
+               - COALESCE(pr.costo_promedio, 0) * vi.cantidad END`;
+  const joinProd = `LEFT JOIN ${tProd} pr ON pr.id = vi.producto_id AND pr.empresa_id = vi.empresa_id`;
+
+  const rentTotQ = p.query<{
+    ingresos: number; base_sin_iva: number; costo_vendido: number; costo_sin_cargo: number; ganancia: number;
+  }>(
     `SELECT COALESCE(SUM(vi.total_linea) FILTER (WHERE vi.tipo_salida = 'venta'),0)::float8 AS ingresos,
-            COALESCE(SUM(vi.costo_total_snapshot_pyg) FILTER (WHERE vi.tipo_salida = 'venta'),0)::float8 AS costo_vendido,
-            COALESCE(SUM(vi.costo_total_snapshot_pyg) FILTER (WHERE vi.tipo_salida <> 'venta'),0)::float8 AS costo_sin_cargo
-       FROM ${tVI} vi JOIN ${tV} v ON v.id=vi.venta_id WHERE ${perVActivas}`, args);
+            COALESCE(SUM(vi.subtotal)    FILTER (WHERE vi.tipo_salida = 'venta'),0)::float8 AS base_sin_iva,
+            COALESCE(SUM(${COSTO_EFECTIVO}) FILTER (WHERE vi.tipo_salida = 'venta'),0)::float8 AS costo_vendido,
+            COALESCE(SUM(${COSTO_EFECTIVO}) FILTER (WHERE vi.tipo_salida <> 'venta'),0)::float8 AS costo_sin_cargo,
+            COALESCE(SUM(${GANANCIA_EFECTIVA}),0)::float8 AS ganancia
+       FROM ${tVI} vi JOIN ${tV} v ON v.id=vi.venta_id ${joinProd} WHERE ${perVActivas}`, args);
 
   const rentProdQ = p.query<{
-    producto_nombre: string; cantidad: number; ingresos: number; costo: number; ganancia: number;
+    producto_nombre: string; cantidad: number; ingresos: number; base_sin_iva: number; costo: number; ganancia: number;
   }>(
     `SELECT vi.producto_nombre,
             COALESCE(SUM(vi.cantidad),0)::float8 AS cantidad,
             COALESCE(SUM(vi.total_linea),0)::float8 AS ingresos,
-            COALESCE(SUM(vi.costo_total_snapshot_pyg),0)::float8 AS costo,
-            COALESCE(SUM(vi.ganancia_pyg),0)::float8 AS ganancia
-       FROM ${tVI} vi JOIN ${tV} v ON v.id=vi.venta_id WHERE ${perVActivas}
+            COALESCE(SUM(vi.subtotal) FILTER (WHERE vi.tipo_salida = 'venta'),0)::float8 AS base_sin_iva,
+            COALESCE(SUM(${COSTO_EFECTIVO}),0)::float8 AS costo,
+            COALESCE(SUM(${GANANCIA_EFECTIVA}),0)::float8 AS ganancia
+       FROM ${tVI} vi JOIN ${tV} v ON v.id=vi.venta_id ${joinProd} WHERE ${perVActivas}
       GROUP BY vi.producto_id, vi.producto_nombre
       ORDER BY ganancia DESC`, args);
 
@@ -434,17 +455,23 @@ export async function getReporteVentas(
     })),
     rentabilidad: (() => {
       const ingresos = num(rentTot.rows[0]?.ingresos);
+      const baseSinIva = num(rentTot.rows[0]?.base_sin_iva);
       const costoVendido = num(rentTot.rows[0]?.costo_vendido);
       const costoSinCargo = num(rentTot.rows[0]?.costo_sin_cargo);
-      const gananciaBruta = ingresos - costoVendido - costoSinCargo;
+      // Ganancia efectiva (subtotal sin IVA − costo), sumada en SQL con el mismo
+      // fallback que el dashboard: así cabecera, detalle por producto y dashboard
+      // dan el mismo número. El IVA no es ganancia (se le debe al fisco), por eso
+      // el margen va sobre la base sin IVA, no sobre lo facturado con IVA.
+      const gananciaBruta = num(rentTot.rows[0]?.ganancia);
       return {
         ingresos,
         costoVendido,
         costoSinCargo,
         gananciaBruta,
-        margenBruto: ingresos > 0 ? (gananciaBruta / ingresos) * 100 : 0,
+        margenBruto: baseSinIva > 0 ? (gananciaBruta / baseSinIva) * 100 : 0,
         porProducto: rentProd.rows.map((r) => {
           const ing = num(r.ingresos);
+          const base = num(r.base_sin_iva);
           const gan = num(r.ganancia);
           return {
             producto_nombre: r.producto_nombre,
@@ -452,7 +479,7 @@ export async function getReporteVentas(
             ingresos: ing,
             costo: num(r.costo),
             ganancia: gan,
-            margen: ing > 0 ? (gan / ing) * 100 : 0,
+            margen: base > 0 ? (gan / base) * 100 : 0,
           };
         }),
       };

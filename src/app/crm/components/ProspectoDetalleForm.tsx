@@ -10,12 +10,12 @@ import {
   updateProspecto,
 } from "@/lib/crm/storage";
 import { getEtapas, getEtapaClasses } from "@/lib/crm/etapas";
-import { getPlanes } from "@/lib/planes/storage";
-import PlanSelector from "@/components/crm/PlanSelector";
+import { getProductos } from "@/lib/inventario/storage";
+import ProductoInteresSelector from "@/components/crm/ProductoInteresSelector";
 import { getBrowserSupabaseForEmpresaData } from "@/lib/supabase/browser-data-client";
 import type { EtapaCrm } from "@/lib/crm/etapas";
 import type { Nota, Prospecto } from "@/lib/crm/types";
-import type { Plan } from "@/lib/planes/types";
+import type { Producto } from "@/lib/inventario/types";
 
 export type ProspectoDetalleFormProps = {
   id: string;
@@ -89,7 +89,7 @@ export default function ProspectoDetalleForm({
     contacto: "",
     email: "",
     telefono: "",
-    planIds: [] as string[],
+    productoIds: [] as string[],
     proxima_accion: "",
     fecha_proxima_accion: "",
     creado_por: "",
@@ -103,9 +103,12 @@ export default function ProspectoDetalleForm({
 
   const [errorForm, setErrorForm] = useState<string | null>(null);
   const [confirmarEliminar, setConfirmarEliminar] = useState(false);
-  const [planes, setPlanes] = useState<Plan[]>([]);
+  const [productos, setProductos] = useState<Producto[]>([]);
   const [etapas, setEtapas] = useState<EtapaCrm[]>([]);
-  const [cargandoPlanes, setCargandoPlanes] = useState(true);
+  const [cargandoProductos, setCargandoProductos] = useState(true);
+  // Valor estimado editable: se precarga con el guardado y se puede resugerir.
+  const [valorEstimado, setValorEstimado] = useState("");
+  const [valorEditado, setValorEditado] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -113,21 +116,24 @@ export default function ProspectoDetalleForm({
   }, []);
 
   useEffect(() => {
-    getPlanes()
-      .then(setPlanes)
-      .catch(() => setPlanes([]))
-      .finally(() => setCargandoPlanes(false));
+    getProductos()
+      .then(setProductos)
+      .catch(() => setProductos([]))
+      .finally(() => setCargandoProductos(false));
   }, []);
 
   useEffect(() => {
-    if (!prospecto || planes.length === 0) return;
+    if (!prospecto || productos.length === 0) return;
     const nombres = prospecto.servicio.split(",").map((s) => s.trim()).filter(Boolean);
     const ids = nombres
-      .map((n) => planes.find((p) => p.nombre === n)?.id)
+      .map((n) => productos.find((p) => p.nombre === n)?.id)
       .filter((pid): pid is string => Boolean(pid));
-    setForm((prev) => ({ ...prev, planIds: ids }));
+    setForm((prev) => ({ ...prev, productoIds: ids }));
+    // El valor guardado manda: se muestra tal cual y no se pisa al togglear.
+    setValorEstimado(prospecto.valor_estimado > 0 ? String(Math.round(prospecto.valor_estimado)) : "");
+    setValorEditado(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prospecto?.id, prospecto?.servicio, planes]);
+  }, [prospecto?.id, prospecto?.servicio, productos]);
 
   useEffect(() => {
     async function loadConversationId() {
@@ -225,18 +231,23 @@ export default function ProspectoDetalleForm({
     setForm((prev) => ({ ...prev, [name]: normalized }));
   }
 
-  function togglePlan(planId: string) {
-    setForm((prev) => ({
-      ...prev,
-      planIds: prev.planIds.includes(planId)
-        ? prev.planIds.filter((pid) => pid !== planId)
-        : [...prev.planIds, planId],
-    }));
+  function toggleProducto(productoId: string) {
+    const productoIds = form.productoIds.includes(productoId)
+      ? form.productoIds.filter((pid) => pid !== productoId)
+      : [...form.productoIds, productoId];
+    setForm((prev) => ({ ...prev, productoIds }));
+    if (!valorEditado) {
+      const suma = productoIds.reduce(
+        (s, id) => s + Number(productos.find((p) => p.id === id)?.precio_venta ?? 0),
+        0,
+      );
+      setValorEstimado(suma > 0 ? String(Math.round(suma)) : "");
+    }
   }
 
-  const planesActivos = planes.filter((p) => p.estado === "activo");
-  const valorEstimado = form.planIds.reduce(
-    (sum, pid) => sum + (planesActivos.find((p) => p.id === pid)?.precio ?? 0),
+  const valorEstimadoNum = Number(valorEstimado) || 0;
+  const sugerido = form.productoIds.reduce(
+    (sum, id) => sum + Number(productos.find((p) => p.id === id)?.precio_venta ?? 0),
     0,
   );
 
@@ -246,8 +257,8 @@ export default function ProspectoDetalleForm({
     if (!form.empresa.trim()) return setErrorForm("La empresa es obligatoria.");
     if (!form.contacto.trim()) return setErrorForm("El contacto es obligatorio.");
 
-    const servicioTexto = form.planIds
-      .map((pid) => planesActivos.find((p) => p.id === pid)?.nombre)
+    const servicioTexto = form.productoIds
+      .map((pid) => productos.find((p) => p.id === pid)?.nombre)
       .filter(Boolean)
       .join(", ");
 
@@ -259,7 +270,7 @@ export default function ProspectoDetalleForm({
         email: form.email.trim() || undefined,
         telefono: form.telefono.trim() || undefined,
         servicio: servicioTexto,
-        valor_estimado: valorEstimado,
+        valor_estimado: valorEstimadoNum,
         proxima_accion: form.proxima_accion.trim() || undefined,
         fecha_proxima_accion: form.fecha_proxima_accion || undefined,
         responsable: form.responsable.trim().toUpperCase() || undefined,
@@ -544,27 +555,27 @@ export default function ProspectoDetalleForm({
               </p>
             </div>
 
-            {/* Servicios */}
+            {/* Productos de interés */}
             <div>
-              <label className={LABEL_CLS}>Servicios / Productos de interés</label>
-              {cargandoPlanes ? (
-                <p className="py-2 text-sm text-slate-400">Cargando planes…</p>
-              ) : planes.length === 0 ? (
+              <label className={LABEL_CLS}>Productos de interés</label>
+              {cargandoProductos ? (
+                <p className="py-2 text-sm text-slate-400">Cargando productos…</p>
+              ) : productos.length === 0 ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  <p className="font-medium">No hay planes creados para esta empresa.</p>
+                  <p className="font-medium">No hay productos cargados todavía.</p>
                   <Link
-                    href="/planes/nuevo"
+                    href="/inventario/nuevo"
                     className="mt-2 inline-flex items-center gap-1.5 font-medium text-[#4FAEB2] hover:text-[#3F8E91]"
                   >
-                    Ir a crear plan →
+                    Ir a cargar producto →
                   </Link>
                 </div>
               ) : (
-                <PlanSelector
-                  planes={planes}
-                  selectedIds={form.planIds}
-                  onToggle={togglePlan}
-                  placeholder="Buscar plan por nombre…"
+                <ProductoInteresSelector
+                  productos={productos}
+                  selectedIds={form.productoIds}
+                  onToggle={toggleProducto}
+                  placeholder="Buscar producto por nombre o SKU…"
                 />
               )}
             </div>
@@ -574,13 +585,28 @@ export default function ProspectoDetalleForm({
               <label className={LABEL_CLS}>Valor estimado (Gs.)</label>
               <input
                 type="text"
-                readOnly
-                value={valorEstimado > 0 ? valorEstimado.toLocaleString("es-PY") : ""}
-                placeholder="Se calcula automáticamente"
-                className={`${INPUT_CLS} cursor-not-allowed bg-slate-50`}
+                inputMode="numeric"
+                value={valorEstimadoNum > 0 ? valorEstimadoNum.toLocaleString("es-PY") : ""}
+                onChange={(e) => {
+                  setValorEstimado(e.target.value.replace(/\D/g, ""));
+                  setValorEditado(true);
+                }}
+                placeholder="Ej: 500.000"
+                className={INPUT_CLS}
               />
-              {valorEstimado > 0 ? (
-                <p className="mt-1 text-xs text-slate-500">Suma de los planes seleccionados</p>
+              {sugerido > 0 ? (
+                <p className="mt-1 text-xs text-slate-500">
+                  Sugerido por los productos: {sugerido.toLocaleString("es-PY")} ₲
+                  {valorEditado && (
+                    <button
+                      type="button"
+                      onClick={() => { setValorEstimado(String(Math.round(sugerido))); setValorEditado(false); }}
+                      className="ml-1.5 font-medium text-[#4FAEB2] hover:text-[#3F8E91]"
+                    >
+                      usar
+                    </button>
+                  )}
+                </p>
               ) : null}
             </div>
 

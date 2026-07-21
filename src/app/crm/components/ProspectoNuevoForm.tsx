@@ -5,11 +5,11 @@ import { useEffect, useState } from "react";
 import { getProspectos, saveProspecto } from "@/lib/crm/storage";
 import { getEtapas } from "@/lib/crm/etapas";
 import { getCurrentUser } from "@/lib/auth";
-import { getPlanes } from "@/lib/planes/storage";
-import PlanSelector from "@/components/crm/PlanSelector";
+import { getProductos } from "@/lib/inventario/storage";
+import ProductoInteresSelector from "@/components/crm/ProductoInteresSelector";
 import { cleanTelefono, formatTelefonoDisplay, isValidTelefono } from "@/lib/telefono";
 import type { EtapaCrm } from "@/lib/crm/etapas";
-import type { Plan } from "@/lib/planes/types";
+import type { Producto } from "@/lib/inventario/types";
 
 export type ProspectoNuevoFormProps = {
   variant?: "page" | "modal";
@@ -50,7 +50,7 @@ export default function ProspectoNuevoForm({
     contacto: "",
     email: "",
     telefono: "",
-    planIds: [] as string[],
+    productoIds: [] as string[],
     etapa: "",
     proxima_accion: "",
     fecha_proxima_accion: "",
@@ -59,18 +59,23 @@ export default function ProspectoNuevoForm({
   });
 
   const [error, setError] = useState<string | null>(null);
-  const [planes, setPlanes] = useState<Plan[]>([]);
+  const [productos, setProductos] = useState<Producto[]>([]);
   const [etapas, setEtapas] = useState<EtapaCrm[]>([]);
-  const [cargandoPlanes, setCargandoPlanes] = useState(true);
+  const [cargandoProductos, setCargandoProductos] = useState(true);
+  // Valor estimado del lead: se sugiere sumando los productos elegidos, pero es
+  // editable. `valorEditado` marca que el usuario lo tocó a mano, para no
+  // pisarle su número cuando agrega otro producto.
+  const [valorEstimado, setValorEstimado] = useState("");
+  const [valorEditado, setValorEditado] = useState(false);
   const [usuarioActual, setUsuarioActual] = useState<{ nombre?: string; email?: string } | null>(null);
   const [telefonosHistorial, setTelefonosHistorial] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    getPlanes()
-      .then(setPlanes)
-      .catch(() => setPlanes([]))
-      .finally(() => setCargandoPlanes(false));
+    getProductos()
+      .then(setProductos)
+      .catch(() => setProductos([]))
+      .finally(() => setCargandoProductos(false));
   }, []);
 
   useEffect(() => {
@@ -128,22 +133,28 @@ export default function ProspectoNuevoForm({
     setForm((prev) => ({ ...prev, [name]: normalized }));
   }
 
-  function togglePlan(planId: string) {
-    setForm((prev) => ({
-      ...prev,
-      planIds: prev.planIds.includes(planId)
-        ? prev.planIds.filter((id) => id !== planId)
-        : [...prev.planIds, planId],
-    }));
+  function toggleProducto(productoId: string) {
+    const productoIds = form.productoIds.includes(productoId)
+      ? form.productoIds.filter((id) => id !== productoId)
+      : [...form.productoIds, productoId];
+    setForm((prev) => ({ ...prev, productoIds }));
+    // Sugerencia del valor: solo si el usuario todavía no lo escribió a mano.
+    if (!valorEditado) {
+      const suma = productoIds.reduce(
+        (s, id) => s + Number(productos.find((p) => p.id === id)?.precio_venta ?? 0),
+        0,
+      );
+      setValorEstimado(suma > 0 ? String(Math.round(suma)) : "");
+    }
   }
 
-  const planesActivos = planes.filter((p) => p.estado === "activo");
-  const servicioTexto = form.planIds
-    .map((id) => planesActivos.find((p) => p.id === id)?.nombre)
+  const servicioTexto = form.productoIds
+    .map((id) => productos.find((p) => p.id === id)?.nombre)
     .filter(Boolean)
     .join(", ");
-  const valorEstimado = form.planIds.reduce(
-    (sum, id) => sum + (planesActivos.find((p) => p.id === id)?.precio ?? 0),
+  const valorEstimadoNum = Number(valorEstimado) || 0;
+  const sugerido = form.productoIds.reduce(
+    (sum, id) => sum + Number(productos.find((p) => p.id === id)?.precio_venta ?? 0),
     0,
   );
 
@@ -153,7 +164,7 @@ export default function ProspectoNuevoForm({
 
     if (!form.empresa.trim()) return setError("La empresa es obligatoria.");
     if (!form.contacto.trim()) return setError("El contacto es obligatorio.");
-    if (form.planIds.length === 0) return setError("Seleccioná al menos un servicio/plan.");
+    if (form.productoIds.length === 0) return setError("Seleccioná al menos un producto de interés.");
     if (!form.etapa) return setError("Seleccioná una etapa.");
     if (form.telefono && !isValidTelefono(form.telefono)) {
       return setError(
@@ -172,7 +183,7 @@ export default function ProspectoNuevoForm({
         email: form.email.trim() || undefined,
         telefono: telefonoGuardar,
         servicio: servicioTexto,
-        valor_estimado: valorEstimado,
+        valor_estimado: valorEstimadoNum,
         etapa: form.etapa,
         proxima_accion: form.proxima_accion.trim() || undefined,
         fecha_proxima_accion: form.fecha_proxima_accion || undefined,
@@ -306,29 +317,29 @@ export default function ProspectoNuevoForm({
           <div className="space-y-4">
             <div>
               <label className={LABEL_CLS}>
-                Servicios / Productos de interés <span className="text-rose-500">*</span>
+                Productos de interés <span className="text-rose-500">*</span>
               </label>
-              {cargandoPlanes ? (
-                <p className="py-2 text-sm text-slate-400">Cargando planes…</p>
-              ) : planes.length === 0 ? (
+              {cargandoProductos ? (
+                <p className="py-2 text-sm text-slate-400">Cargando productos…</p>
+              ) : productos.length === 0 ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  <p className="font-medium">No hay planes creados para esta empresa.</p>
+                  <p className="font-medium">No hay productos cargados todavía.</p>
                   <p className="mt-1 text-amber-700">
-                    Creá un plan primero para poder seleccionarlo como servicio de interés.
+                    Cargá productos en el inventario para poder elegirlos como interés del lead.
                   </p>
                   <Link
-                    href="/planes/nuevo"
+                    href="/inventario/nuevo"
                     className="mt-3 inline-flex items-center gap-1.5 font-medium text-[#4FAEB2] hover:text-[#3F8E91]"
                   >
-                    Ir a crear plan →
+                    Ir a cargar producto →
                   </Link>
                 </div>
               ) : (
-                <PlanSelector
-                  planes={planes}
-                  selectedIds={form.planIds}
-                  onToggle={togglePlan}
-                  placeholder="Buscar plan por nombre…"
+                <ProductoInteresSelector
+                  productos={productos}
+                  selectedIds={form.productoIds}
+                  onToggle={toggleProducto}
+                  placeholder="Buscar producto por nombre o SKU…"
                 />
               )}
             </div>
@@ -338,13 +349,29 @@ export default function ProspectoNuevoForm({
                 <label className={LABEL_CLS}>Valor estimado (Gs.)</label>
                 <input
                   type="text"
-                  readOnly
-                  value={valorEstimado > 0 ? valorEstimado.toLocaleString("es-PY") : ""}
-                  placeholder="Se calcula automáticamente"
-                  className={`${INPUT_CLS} cursor-not-allowed bg-slate-50`}
+                  inputMode="numeric"
+                  value={valorEstimadoNum > 0 ? valorEstimadoNum.toLocaleString("es-PY") : ""}
+                  onChange={(e) => {
+                    // Se guarda solo el número; los puntos de miles son cosmética.
+                    setValorEstimado(e.target.value.replace(/\D/g, ""));
+                    setValorEditado(true);
+                  }}
+                  placeholder="Ej: 500.000"
+                  className={INPUT_CLS}
                 />
-                {valorEstimado > 0 && (
-                  <p className="mt-1 text-xs text-slate-500">Suma de los planes seleccionados</p>
+                {sugerido > 0 && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Sugerido por los productos: {sugerido.toLocaleString("es-PY")} ₲
+                    {valorEditado && (
+                      <button
+                        type="button"
+                        onClick={() => { setValorEstimado(String(Math.round(sugerido))); setValorEditado(false); }}
+                        className="ml-1.5 font-medium text-[#4FAEB2] hover:text-[#3F8E91]"
+                      >
+                        usar
+                      </button>
+                    )}
+                  </p>
                 )}
               </div>
               <div>

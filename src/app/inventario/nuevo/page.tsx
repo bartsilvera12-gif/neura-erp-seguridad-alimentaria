@@ -543,7 +543,7 @@ export default function NuevoProductoPage() {
                 min={0}
                 step="any"
                 placeholder="Ej: 250"
-                className={inputClass}
+                className={`${inputClass} flex-1 min-w-0`}
               />
               <select
                 name="peso_unidad"

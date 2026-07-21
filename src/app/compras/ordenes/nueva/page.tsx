@@ -6,6 +6,7 @@ import TipoCambioField from "@/components/compras/TipoCambioField";
 import { useRouter } from "next/navigation";
 import { Search, Trash2, Loader2, Plus, ImageIcon } from "lucide-react";
 import { getProveedores } from "@/lib/proveedores/storage";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 import { saveOrdenCompra, type OrdenItemPayload } from "@/lib/ordenes-compra/storage";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import type { Proveedor } from "@/lib/proveedores/types";
@@ -241,12 +242,17 @@ export default function NuevaOrdenCompraPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="sm:col-span-2">
               <label className="mb-1 block text-xs font-semibold text-slate-600">Proveedor <span className="text-red-500">*</span></label>
-              <select value={cab.proveedor_id} onChange={(e) => setCab((p) => ({ ...p, proveedor_id: e.target.value }))} className={inputClass}>
-                <option value="">— Seleccioná un proveedor —</option>
-                {proveedores.map((p) => (
-                  <option key={p.id} value={String(p.id)}>{p.nombre}{p.ruc ? ` · ${p.ruc}` : ""}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={cab.proveedor_id || null}
+                onChange={(id) => setCab((p) => ({ ...p, proveedor_id: id }))}
+                options={proveedores.map((p) => ({
+                  id: String(p.id),
+                  label: p.nombre,
+                  hint: p.ruc ? `RUC ${p.ruc}` : null,
+                }))}
+                placeholder="Buscar proveedor…"
+                emptyText="Sin proveedores que coincidan"
+              />
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-600">Moneda</label>

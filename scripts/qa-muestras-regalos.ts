@@ -101,7 +101,9 @@ async function main() {
   check(Number(itMuestra[0]?.costo_total_snapshot_pyg) === 2000, "Costo total = 2000");
   check(Number(itMuestra[0]?.ganancia_pyg) === -2000, "Ganancia NEGATIVA por el costo entregado", `${itMuestra[0]?.ganancia_pyg}`);
   check(itMuestra[0]?.tipo_salida === "muestra", "tipo_salida = muestra");
-  check(!!itMuestra[0]?.motivo_salida, "Motivo guardado", itMuestra[0]?.motivo_salida);
+  // El motivo dejo de ser obligatorio en caja (decision del cliente). La
+  // columna sigue existiendo y admite valor, pero ya no se exige al vender.
+  check(itMuestra[0]?.tipo_salida === "muestra", "Tipo de salida guardado como muestra", itMuestra[0]?.tipo_salida);
 
   const { rows: movMuestra } = await pool().query<{ tipo_salida: string; n: string }>(
     `SELECT tipo_salida, count(*) n FROM ${SCHEMA}.movimientos_inventario

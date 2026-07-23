@@ -514,7 +514,7 @@ export default function EditarProductoPage() {
               NO reemplaza a la unidad de medida comercial. */}
           <div className="border-t border-slate-100 pt-5">
             <label className={labelClass}>Peso del producto</label>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_11rem] gap-2">
               <input
                 type="number"
                 name="peso"
@@ -523,13 +523,13 @@ export default function EditarProductoPage() {
                 min={0}
                 step="any"
                 placeholder="Ej: 250"
-                className={`${inputClass} flex-1 min-w-0`}
+                className={inputClass}
               />
               <select
                 name="peso_unidad"
                 value={form.peso_unidad}
                 onChange={handleChange}
-                className={`${inputClass} w-44 shrink-0`}
+                className={inputClass}
               >
                 {PESO_UNIDADES.map((u) => (
                   <option key={u.value} value={u.value}>{u.label}</option>

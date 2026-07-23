@@ -182,7 +182,7 @@ export default function ProductoDocumentos({ productoId }: { productoId: string 
           type="button"
           onClick={() => inputRef.current?.click()}
           disabled={subiendo}
-          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-lg bg-[#4FAEB2] px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#3F8E91] disabled:opacity-50"
         >
           {subiendo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
           {subiendo ? "Subiendo…" : "Adjuntar documento"}

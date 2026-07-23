@@ -19,6 +19,8 @@ interface ProductoSearchHit {
   stock_minimo: number;
   unidad_medida: string;
   metodo_valuacion: string;
+  /** Peso unitario en gramos. Lo consume la orden de compra para estimar flete. */
+  peso_gramos: number | null;
   imagen_path: string | null;
   imagen_url: string | null;
   categoria_nombre: string | null;
@@ -61,7 +63,7 @@ export async function GET(request: NextRequest) {
       .select(
         "id, nombre, sku, codigo_barras, codigo_barras_interno, " +
           "precio_venta, precio_mayorista, precio_distribuidor, costo_promedio, stock_actual, stock_minimo, " +
-          "unidad_medida, metodo_valuacion, imagen_path, imagen_url, " +
+          "unidad_medida, metodo_valuacion, peso_gramos, imagen_path, imagen_url, " +
           "categoria_principal_id, proveedor_principal_id, ubicacion_principal_id, " +
           "es_vendible, controla_stock, modo_receta, tipo_iva, activo"
       )
@@ -97,6 +99,7 @@ export async function GET(request: NextRequest) {
       stock_minimo: Number(r.stock_minimo ?? 0),
       unidad_medida: String(r.unidad_medida ?? "UNIDAD"),
       metodo_valuacion: String(r.metodo_valuacion ?? "CPP"),
+      peso_gramos: r.peso_gramos != null ? Number(r.peso_gramos) : null,
       imagen_path: (r.imagen_path as string | null) ?? null,
       imagen_url: (r.imagen_url as string | null) ?? null,
       es_vendible: r.es_vendible !== false,
@@ -127,6 +130,7 @@ export async function GET(request: NextRequest) {
       stock_minimo: r.stock_minimo,
       unidad_medida: r.unidad_medida,
       metodo_valuacion: r.metodo_valuacion,
+      peso_gramos: r.peso_gramos,
       imagen_path: r.imagen_path,
       imagen_url: (i < SIGN_TOP ? signedUrls[i] : null) ?? r.imagen_url ?? null,
       categoria_nombre: null,

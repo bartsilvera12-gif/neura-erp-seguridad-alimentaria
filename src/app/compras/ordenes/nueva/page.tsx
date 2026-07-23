@@ -9,6 +9,7 @@ import { getProveedores } from "@/lib/proveedores/storage";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 import { saveOrdenCompra, type OrdenItemPayload } from "@/lib/ordenes-compra/storage";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
+import { aKilos, formatPeso } from "@/lib/inventario/peso";
 import type { Proveedor } from "@/lib/proveedores/types";
 import type { TipoIva, TipoPago, Moneda } from "@/lib/compras/types";
 
@@ -35,6 +36,8 @@ type ComboHit = {
   stock_actual: number;
   controla_stock: boolean;
   imagen_url: string | null;
+  /** Peso unitario en gramos. Alimenta la estimacion de flete del embarque. */
+  peso_gramos: number | null;
 };
 
 function fmtGs(v: number) {
@@ -56,6 +59,7 @@ type Linea = {
   costo_input: number; // en la moneda de la cabecera
   iva_tipo: TipoIva;
   precio_venta: number;
+  peso_gramos: number | null;
 };
 
 const inputClass = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#4FAEB2]/30 bg-white";
@@ -72,6 +76,9 @@ export default function NuevaOrdenCompraPage() {
     cotizacion_fuente: null as string | null,
     cotizacion_fecha: null as string | null,
     cotizacion_es_manual: false,
+    // Costo del kilo de flete de ESTE embarque. Cambia por envio (courier,
+    // aereo, maritimo), por eso vive en la orden y no en el producto.
+    flete_por_kilo: "",
     tipo_pago: "contado" as TipoPago,
     plazo_dias: "",
     observacion: "",
@@ -115,6 +122,7 @@ export default function NuevaOrdenCompraPage() {
           id: String(p.id), nombre: String(p.nombre ?? ""), sku: String(p.sku ?? ""),
           precio_venta: Number(p.precio_venta) || 0, stock_actual: Number(p.stock_actual) || 0,
           controla_stock: p.controla_stock !== false, imagen_url: (p.imagen_url as string | null) ?? null,
+          peso_gramos: p.peso_gramos != null ? Number(p.peso_gramos) : null,
         })));
       } catch { setHits([]); }
       finally { setBuscando(false); }
@@ -142,6 +150,7 @@ export default function NuevaOrdenCompraPage() {
           costo_input: 0,
           iva_tipo: "10",
           precio_venta: p.precio_venta,
+          peso_gramos: p.peso_gramos,
         },
       ];
     });
@@ -170,6 +179,17 @@ export default function NuevaOrdenCompraPage() {
     () => lineas.reduce((s, l) => s + l.costo_input * tc * l.cantidad, 0),
     [lineas, tc]
   );
+
+  // Peso del embarque y flete estimado. El flete NO se suma al costo de los
+  // productos: es una referencia para dimensionar el envio. Capitalizarlo al
+  // inventario es una decision contable que todavia no esta definida.
+  const pesoTotalGramos = useMemo(
+    () => lineas.reduce((s, l) => s + (l.peso_gramos ?? 0) * l.cantidad, 0),
+    [lineas]
+  );
+  const lineasSinPeso = useMemo(() => lineas.filter((l) => !l.peso_gramos).length, [lineas]);
+  const fletePorKilo = Number(cab.flete_por_kilo) || 0;
+  const fleteTotal = aKilos(pesoTotalGramos) * fletePorKilo;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -213,6 +233,7 @@ export default function NuevaOrdenCompraPage() {
           cotizacion_fuente: cab.moneda === "USD" ? cab.cotizacion_fuente : null,
           cotizacion_fecha: cab.moneda === "USD" ? cab.cotizacion_fecha : null,
           cotizacion_es_manual: cab.moneda === "USD" ? cab.cotizacion_es_manual : false,
+          flete_por_kilo: Number(cab.flete_por_kilo) > 0 ? Number(cab.flete_por_kilo) : null,
           tipo_pago: cab.tipo_pago,
           plazo_dias: cab.tipo_pago === "credito" && cab.plazo_dias ? parseInt(cab.plazo_dias) : undefined,
           observacion: cab.observacion.trim() || null,
@@ -278,6 +299,20 @@ export default function NuevaOrdenCompraPage() {
                 }))}
               />
             )}
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">
+                Flete por kilo ({cab.moneda})
+              </label>
+              <input
+                type="number"
+                min={0}
+                step="any"
+                value={cab.flete_por_kilo}
+                onChange={(e) => setCab((p) => ({ ...p, flete_por_kilo: e.target.value }))}
+                placeholder="Opcional"
+                className={inputClass}
+              />
+            </div>
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-600">Tipo de pago</label>
               <select value={cab.tipo_pago} onChange={(e) => setCab((p) => ({ ...p, tipo_pago: e.target.value as TipoPago }))} className={inputClass}>
@@ -368,6 +403,7 @@ export default function NuevaOrdenCompraPage() {
                     <th className="px-3 py-3 text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">Cant.</th>
                     <th className="px-3 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Costo unit. ({cab.moneda})</th>
                     <th className="px-3 py-3 text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">IVA</th>
+                    <th className="px-3 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Peso</th>
                     <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Total (Gs.)</th>
                     <th className="w-10 px-2 py-3" />
                   </tr>
@@ -402,6 +438,18 @@ export default function NuevaOrdenCompraPage() {
                           })}
                         </div>
                       </td>
+                      <td className="px-3 py-3 text-right text-sm tabular-nums">
+                        {l.peso_gramos ? (
+                          <span className="text-slate-600">{formatPeso(l.peso_gramos * l.cantidad)}</span>
+                        ) : (
+                          <span
+                            className="cursor-help text-amber-600"
+                            title="Este producto no tiene peso cargado. Cargalo en Inventario para que entre en el flete."
+                          >
+                            sin peso
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-right text-sm font-bold tabular-nums text-slate-900">
                         {fmtGs(l.costo_input * tc * l.cantidad)}
                       </td>
@@ -422,9 +470,35 @@ export default function NuevaOrdenCompraPage() {
 
         {/* Total + submit */}
         <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Total estimado</p>
-            <p className="text-2xl font-bold tabular-nums text-slate-900">{fmtGs(totalOc)}</p>
+          <div className="flex flex-wrap items-center gap-x-10 gap-y-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Total estimado</p>
+              <p className="text-2xl font-bold tabular-nums text-slate-900">{fmtGs(totalOc)}</p>
+            </div>
+            {pesoTotalGramos > 0 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Peso del envío</p>
+                <p className="text-2xl font-bold tabular-nums text-slate-900">{formatPeso(pesoTotalGramos)}</p>
+                {lineasSinPeso > 0 && (
+                  <p className="mt-0.5 text-[11px] text-amber-600">
+                    {lineasSinPeso} {lineasSinPeso === 1 ? "producto sin peso" : "productos sin peso"} — no suman
+                  </p>
+                )}
+              </div>
+            )}
+            {fleteTotal > 0 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Flete estimado</p>
+                <p className="text-2xl font-bold tabular-nums text-[#3F8E91]">
+                  {cab.moneda === "USD"
+                    ? `USD ${fleteTotal.toLocaleString("es-PY", { maximumFractionDigits: 2 })}`
+                    : fmtGs(fleteTotal)}
+                </p>
+                {cab.moneda === "USD" && tc > 0 && (
+                  <p className="mt-0.5 text-[11px] text-slate-400">≈ {fmtGs(fleteTotal * tc)}</p>
+                )}
+              </div>
+            )}
           </div>
           <button type="submit" disabled={enviando}
             className="inline-flex items-center gap-2 rounded-xl bg-[#4FAEB2] px-6 py-3 text-sm font-bold text-white shadow-md shadow-[#4FAEB2]/30 hover:bg-[#3F8E91] disabled:opacity-50">

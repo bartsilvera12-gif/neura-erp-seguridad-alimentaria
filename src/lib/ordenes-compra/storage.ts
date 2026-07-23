@@ -99,6 +99,8 @@ export interface OrdenHeaderPayload {
   cotizacion_fuente?: string | null;
   cotizacion_fecha?: string | null;
   cotizacion_es_manual?: boolean;
+  /** Costo de flete por kilo del embarque (moneda de la orden). Estimacion. */
+  flete_por_kilo?: number | null;
 }
 
 interface OkOrden { success: true; numero_oc: string; ordenes: OrdenCompra[]; }

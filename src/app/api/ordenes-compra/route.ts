@@ -64,6 +64,7 @@ export async function POST(request: NextRequest) {
         body.cotizacion_fecha != null && String(body.cotizacion_fecha).trim() !== ""
           ? String(body.cotizacion_fecha) : null,
       cotizacion_es_manual: body.cotizacion_es_manual === true,
+      flete_por_kilo: Number(body.flete_por_kilo) > 0 ? Number(body.flete_por_kilo) : null,
       tipo_pago: body.tipo_pago === "credito" ? "credito" : "contado",
       plazo_dias:
         body.plazo_dias != null && String(body.plazo_dias).trim() !== ""

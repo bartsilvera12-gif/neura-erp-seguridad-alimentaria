@@ -35,6 +35,7 @@ export interface OrdenCompraRow {
   cotizacion_fuente: string | null;
   cotizacion_fecha: string | null;
   cotizacion_es_manual: boolean;
+  flete_por_kilo: string | number | null;
   costo_unitario_original: string | number;
   costo_unitario: string | number;
   iva_tipo: string;
@@ -61,7 +62,7 @@ export interface OrdenCompraRow {
 const COLS = `
   id, empresa_id, numero_oc, proveedor_id, proveedor_nombre, producto_id, producto_nombre,
   cantidad, cantidad_recibida, moneda, tipo_cambio, costo_unitario_original, costo_unitario,
-  cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual,
+  cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual, flete_por_kilo,
   iva_tipo, subtotal, monto_iva, total, precio_venta, margen_venta,
   tipo_pago, plazo_dias, estado, observacion,
   compra_numero_control, recibida_at, cancelada_at, cancelada_motivo,
@@ -77,6 +78,8 @@ export interface OrdenCompraHeaderInput {
   cotizacion_fuente?: string | null;
   cotizacion_fecha?: string | null;
   cotizacion_es_manual?: boolean;
+  /** Costo de flete por kilo del embarque, en la moneda de la orden. Solo referencia. */
+  flete_por_kilo?: number | null;
   tipo_pago: string;
   plazo_dias: number | null;
   observacion: string | null;
@@ -178,13 +181,13 @@ export async function insertOrdenCompra(
            cantidad, moneda, tipo_cambio, costo_unitario_original, costo_unitario,
            iva_tipo, subtotal, monto_iva, total, precio_venta, margen_venta,
            tipo_pago, plazo_dias, estado, observacion, fecha, created_by, usuario_nombre,
-           cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual
+           cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual, flete_por_kilo
          ) VALUES (
            $1::uuid, $2, $3::uuid, $4, $5::uuid, $6,
            $7::numeric, $8, $9::numeric, $10::numeric, $11::numeric,
            $12, $13::numeric, $14::numeric, $15::numeric, $16::numeric, $17::numeric,
            $18, $19::integer, 'pendiente', $20, now(), $21::uuid, $22,
-           $23, $24::timestamptz, $25::boolean
+           $23, $24::timestamptz, $25::boolean, $26::numeric
          )
          RETURNING ${COLS}`,
         [
@@ -199,6 +202,7 @@ export async function insertOrdenCompra(
           header.moneda === "USD" ? header.cotizacion_fuente ?? null : null,
           header.moneda === "USD" ? header.cotizacion_fecha ?? null : null,
           header.moneda === "USD" ? header.cotizacion_es_manual === true : false,
+          header.flete_por_kilo != null && header.flete_por_kilo > 0 ? header.flete_por_kilo : null,
         ]
       );
       inserted.push(rows[0]);

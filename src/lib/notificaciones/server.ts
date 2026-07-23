@@ -204,13 +204,15 @@ export async function evaluarOrdenesPendientes(
     unidades_pendientes: string;
     fecha_estimada: string | null;
     dias_para_llegada: string | null;
+    dias_aviso: string | null;
   }>(
     `SELECT numero_oc AS numero_control,
             MIN(proveedor_nombre) AS proveedor_nombre,
             COUNT(*) FILTER (WHERE cantidad - cantidad_recibida > 0) AS productos_pendientes,
             COALESCE(SUM(GREATEST(cantidad - cantidad_recibida, 0)), 0) AS unidades_pendientes,
             MIN(fecha_estimada_llegada)::text AS fecha_estimada,
-            (MIN(fecha_estimada_llegada) - $2::date) AS dias_para_llegada
+            (MIN(fecha_estimada_llegada) - $2::date) AS dias_para_llegada,
+            MAX(dias_aviso_previo) AS dias_aviso
        FROM ${ordenes}
       WHERE empresa_id = $1::uuid
         AND estado IN ('pendiente', 'recibida_parcial')
@@ -237,7 +239,9 @@ export async function evaluarOrdenesPendientes(
       tipo = TIPO_ORDEN_ATRASADA;
       titulo = "Entrega atrasada";
       mensaje = `Orden ${o.numero_control} (${o.proveedor_nombre}): ${detalle}. Llegada estimada ${o.fecha_estimada}, atrasada ${Math.abs(dias)} día${Math.abs(dias) === 1 ? "" : "s"}.`;
-    } else if (dias != null && dias <= 3) {
+    } else if (dias != null && dias <= (Number(o.dias_aviso) || 3)) {
+      // El anticipo lo define cada orden (`dias_aviso_previo`). Un courier no
+      // necesita el mismo aviso que un embarque maritimo.
       tipo = TIPO_ORDEN_POR_LLEGAR;
       titulo = "Pedido por llegar";
       mensaje = `Orden ${o.numero_control} (${o.proveedor_nombre}): ${detalle}. Llegada estimada: ${o.fecha_estimada}.`;

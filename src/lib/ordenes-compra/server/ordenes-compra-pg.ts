@@ -36,6 +36,8 @@ export interface OrdenCompraRow {
   cotizacion_fecha: string | null;
   cotizacion_es_manual: boolean;
   flete_por_kilo: string | number | null;
+  fecha_estimada_llegada: string | null;
+  dias_aviso_previo: number;
   costo_unitario_original: string | number;
   costo_unitario: string | number;
   iva_tipo: string;
@@ -63,6 +65,7 @@ const COLS = `
   id, empresa_id, numero_oc, proveedor_id, proveedor_nombre, producto_id, producto_nombre,
   cantidad, cantidad_recibida, moneda, tipo_cambio, costo_unitario_original, costo_unitario,
   cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual, flete_por_kilo,
+  fecha_estimada_llegada, dias_aviso_previo,
   iva_tipo, subtotal, monto_iva, total, precio_venta, margen_venta,
   tipo_pago, plazo_dias, estado, observacion,
   compra_numero_control, recibida_at, cancelada_at, cancelada_motivo,
@@ -80,6 +83,10 @@ export interface OrdenCompraHeaderInput {
   cotizacion_es_manual?: boolean;
   /** Costo de flete por kilo del embarque, en la moneda de la orden. Solo referencia. */
   flete_por_kilo?: number | null;
+  /** Cuando se espera la mercaderia (YYYY-MM-DD). Habilita los avisos de llegada. */
+  fecha_estimada_llegada?: string | null;
+  /** Dias antes de la fecha estimada para empezar a avisar por la campanita. */
+  dias_aviso_previo?: number | null;
   tipo_pago: string;
   plazo_dias: number | null;
   observacion: string | null;
@@ -181,13 +188,15 @@ export async function insertOrdenCompra(
            cantidad, moneda, tipo_cambio, costo_unitario_original, costo_unitario,
            iva_tipo, subtotal, monto_iva, total, precio_venta, margen_venta,
            tipo_pago, plazo_dias, estado, observacion, fecha, created_by, usuario_nombre,
-           cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual, flete_por_kilo
+           cotizacion_fuente, cotizacion_fecha, cotizacion_es_manual, flete_por_kilo,
+           fecha_estimada_llegada, dias_aviso_previo
          ) VALUES (
            $1::uuid, $2, $3::uuid, $4, $5::uuid, $6,
            $7::numeric, $8, $9::numeric, $10::numeric, $11::numeric,
            $12, $13::numeric, $14::numeric, $15::numeric, $16::numeric, $17::numeric,
            $18, $19::integer, 'pendiente', $20, now(), $21::uuid, $22,
-           $23, $24::timestamptz, $25::boolean, $26::numeric
+           $23, $24::timestamptz, $25::boolean, $26::numeric,
+           $27::date, $28::integer
          )
          RETURNING ${COLS}`,
         [
@@ -203,6 +212,8 @@ export async function insertOrdenCompra(
           header.moneda === "USD" ? header.cotizacion_fecha ?? null : null,
           header.moneda === "USD" ? header.cotizacion_es_manual === true : false,
           header.flete_por_kilo != null && header.flete_por_kilo > 0 ? header.flete_por_kilo : null,
+          header.fecha_estimada_llegada ?? null,
+          header.dias_aviso_previo != null && header.dias_aviso_previo >= 0 ? header.dias_aviso_previo : 3,
         ]
       );
       inserted.push(rows[0]);
@@ -287,6 +298,12 @@ export interface ConfirmarRecepcionParams {
   observacionCompra: string | null;
   /** Clave de idempotencia: un reintento no vuelve a impactar stock. */
   idempotencyKey?: string | null;
+  /**
+   * Nueva fecha estimada para el SALDO que queda pendiente (YYYY-MM-DD).
+   * Solo se aplica si la recepcion resulta parcial: si llego todo, no hay nada
+   * que esperar y la fecha se limpia.
+   */
+  fechaEstimadaSaldo?: string | null;
   comprobante: {
     url: string | null;
     storage_path: string | null;
@@ -468,9 +485,17 @@ export async function confirmarRecepcionOrdenCompra(
           SET estado = $3,
               compra_numero_control = $4,
               recibida_at = CASE WHEN $3 = 'recibida_total' THEN now() ELSE recibida_at END,
+              -- Si quedo saldo, se reprograma la llegada con la fecha que dio el
+              -- usuario (o se conserva la anterior). Si llego todo, se limpia:
+              -- no tiene sentido seguir avisando por una orden completa.
+              fecha_estimada_llegada = CASE
+                WHEN $3 = 'recibida_total' THEN NULL
+                WHEN $5::date IS NOT NULL THEN $5::date
+                ELSE fecha_estimada_llegada
+              END,
               updated_at = now()
         WHERE empresa_id = $1::uuid AND numero_oc = $2`,
-      [empresaId, params.numeroOc, estadoFinal, out.numero_control]
+      [empresaId, params.numeroOc, estadoFinal, out.numero_control, params.fechaEstimadaSaldo ?? null]
     );
 
     // Deja registrada la recepción para que un reintento con la misma clave

@@ -79,6 +79,10 @@ export default function NuevaOrdenCompraPage() {
     // Costo del kilo de flete de ESTE embarque. Cambia por envio (courier,
     // aereo, maritimo), por eso vive en la orden y no en el producto.
     flete_por_kilo: "",
+    // Cuando se espera la mercaderia. Sin esto los avisos de "por llegar" y
+    // "atrasada" no tienen contra que comparar.
+    fecha_estimada_llegada: "",
+    dias_aviso_previo: "3",
     tipo_pago: "contado" as TipoPago,
     plazo_dias: "",
     observacion: "",
@@ -234,6 +238,8 @@ export default function NuevaOrdenCompraPage() {
           cotizacion_fecha: cab.moneda === "USD" ? cab.cotizacion_fecha : null,
           cotizacion_es_manual: cab.moneda === "USD" ? cab.cotizacion_es_manual : false,
           flete_por_kilo: Number(cab.flete_por_kilo) > 0 ? Number(cab.flete_por_kilo) : null,
+          fecha_estimada_llegada: cab.fecha_estimada_llegada || null,
+          dias_aviso_previo: parseInt(cab.dias_aviso_previo, 10) || 3,
           tipo_pago: cab.tipo_pago,
           plazo_dias: cab.tipo_pago === "credito" && cab.plazo_dias ? parseInt(cab.plazo_dias) : undefined,
           observacion: cab.observacion.trim() || null,
@@ -312,6 +318,29 @@ export default function NuevaOrdenCompraPage() {
                 placeholder="Opcional"
                 className={inputClass}
               />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">Llegada estimada</label>
+              <input
+                type="date"
+                value={cab.fecha_estimada_llegada}
+                onChange={(e) => setCab((p) => ({ ...p, fecha_estimada_llegada: e.target.value }))}
+                className={inputClass}
+              />
+              <span className="mt-1 block text-[11px] text-slate-400">Habilita los avisos de llegada.</span>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">Avisarme (días antes)</label>
+              <input
+                type="number"
+                min={0}
+                max={365}
+                value={cab.dias_aviso_previo}
+                onChange={(e) => setCab((p) => ({ ...p, dias_aviso_previo: e.target.value }))}
+                disabled={!cab.fecha_estimada_llegada}
+                className={`${inputClass} disabled:bg-slate-50 disabled:text-slate-400`}
+              />
+              <span className="mt-1 block text-[11px] text-slate-400">Notificación en la campanita.</span>
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-600">Tipo de pago</label>

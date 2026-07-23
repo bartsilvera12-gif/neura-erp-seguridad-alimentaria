@@ -101,6 +101,9 @@ export interface OrdenHeaderPayload {
   cotizacion_es_manual?: boolean;
   /** Costo de flete por kilo del embarque (moneda de la orden). Estimacion. */
   flete_por_kilo?: number | null;
+  /** Cuando se espera la mercaderia (YYYY-MM-DD). Habilita los avisos. */
+  fecha_estimada_llegada?: string | null;
+  dias_aviso_previo?: number | null;
 }
 
 interface OkOrden { success: true; numero_oc: string; ordenes: OrdenCompra[]; }
@@ -165,6 +168,8 @@ export interface ConfirmarRecepcionPayload {
   comprobante_mime_type?: string | null;
   items: RecepcionItemPayload[];
   permitir_excedente?: boolean;
+  /** Nueva llegada estimada del saldo pendiente (YYYY-MM-DD), si queda algo. */
+  fecha_estimada_saldo?: string | null;
 }
 
 export interface ExcedenteDetalle { producto_nombre: string; pendiente: number; intentado: number }

@@ -88,6 +88,10 @@ export async function POST(
         // reintento de red devuelve la compra ya registrada en vez de duplicar
         // stock. El ERP de origen no tenía esta protección.
         idempotencyKey: str("idempotency_key"),
+        // Reprogramacion de la llegada del saldo pendiente.
+        fechaEstimadaSaldo: /^\d{4}-\d{2}-\d{2}$/.test(String(body.fecha_estimada_saldo ?? ""))
+          ? String(body.fecha_estimada_saldo)
+          : null,
         metodoPago:
           body.metodo_pago === "efectivo" || body.metodo_pago === "transferencia" || body.metodo_pago === "tarjeta"
             ? String(body.metodo_pago)

@@ -158,13 +158,13 @@ export default function ComprasPage() {
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#4FAEB2]">Zentra · Adquisiciones</p>
         </div>
         <h1 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Compras</h1>
-        <p className="mt-0.5 text-xs text-slate-500">Registro de órdenes de compra a proveedores</p>
+        <p className="mt-0.5 text-xs text-slate-500">Mercadería ya recibida y facturada. Impactó el stock.</p>
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm ring-1 ring-[#4FAEB2]/15 sm:p-5 lg:p-6">
 
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-xl font-semibold">Órdenes de compra</h2>
+          <h2 className="text-xl font-semibold">Compras registradas</h2>
           <div className="flex items-center gap-3">
             <ExportExcelButton url="/api/compras/export" />
             <Link href="/compras/nueva"

@@ -65,6 +65,13 @@ export async function POST(request: NextRequest) {
           ? String(body.cotizacion_fecha) : null,
       cotizacion_es_manual: body.cotizacion_es_manual === true,
       flete_por_kilo: Number(body.flete_por_kilo) > 0 ? Number(body.flete_por_kilo) : null,
+      fecha_estimada_llegada: /^\d{4}-\d{2}-\d{2}$/.test(String(body.fecha_estimada_llegada ?? ""))
+        ? String(body.fecha_estimada_llegada)
+        : null,
+      dias_aviso_previo: (() => {
+        const n = parseInt(String(body.dias_aviso_previo ?? ""), 10);
+        return Number.isFinite(n) && n >= 0 && n <= 365 ? n : 3;
+      })(),
       tipo_pago: body.tipo_pago === "credito" ? "credito" : "contado",
       plazo_dias:
         body.plazo_dias != null && String(body.plazo_dias).trim() !== ""

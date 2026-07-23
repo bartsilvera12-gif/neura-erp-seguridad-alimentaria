@@ -47,6 +47,9 @@ export default function DesdeOrdenRecepcionPage() {
   const [proveedorRuc, setProveedorRuc] = useState<string | null>(null);
   const [plazoDias, setPlazoDias] = useState("");
   const [observacionCompra, setObservacionCompra] = useState("");
+  // Cuando la recepcion es parcial hay que decir cuando llega el resto: es lo
+  // que habilita los avisos de la campanita sobre el saldo.
+  const [fechaEstimadaSaldo, setFechaEstimadaSaldo] = useState("");
   const [comprobanteFile, setComprobanteFile] = useState<File | null>(null);
 
   const [procesando, setProcesando] = useState(false);
@@ -89,6 +92,19 @@ export default function DesdeOrdenRecepcionPage() {
 
   const cab = lineas[0];
   const lineasConPendiente = useMemo(() => lineas.filter((l) => l.cantidad_pendiente > 0), [lineas]);
+
+  // Saldo que va a quedar DESPUÉS de esta recepción: lo pendiente de cada línea
+  // menos lo que se está por recibir ahora. Si es > 0, la orden sigue abierta.
+  const unidadesSaldo = useMemo(
+    () =>
+      lineas.reduce((s, l) => {
+        const r = recepcion[l.id];
+        const ahora = r?.llego ? Number(r.cantidad) || 0 : 0;
+        return s + Math.max(0, l.cantidad_pendiente - ahora);
+      }, 0),
+    [lineas, recepcion]
+  );
+  const quedaSaldo = unidadesSaldo > 0;
 
   const totalPedido = useMemo(() => lineas.reduce((s, l) => s + l.total, 0), [lineas]);
   const totalRecibidoAhora = useMemo(() => {
@@ -157,6 +173,7 @@ export default function DesdeOrdenRecepcionPage() {
         comprobante_mime_type: comp?.comprobante_mime_type ?? null,
         items,
         permitir_excedente: permitirExcedente,
+        fecha_estimada_saldo: fechaEstimadaSaldo || null,
       });
       if (!r.success) {
         if (r.excedentes && r.excedentes.length > 0 && !permitirExcedente) {
@@ -335,6 +352,25 @@ export default function DesdeOrdenRecepcionPage() {
             <div>
               <label className={labelClass}>Plazo (días)</label>
               <input type="number" min={1} value={plazoDias} onChange={(e) => setPlazoDias(e.target.value)} className={inputClass} />
+            </div>
+          )}
+          {/* Solo cuando la recepción deja saldo: hay que decir cuándo llega el
+              resto, que es lo que dispara los avisos de la campanita. */}
+          {quedaSaldo && (
+            <div className="sm:col-span-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+              <label className={labelClass}>
+                ¿Cuándo llega el resto? <span className="font-normal text-slate-400">(opcional)</span>
+              </label>
+              <input
+                type="date"
+                value={fechaEstimadaSaldo}
+                onChange={(e) => setFechaEstimadaSaldo(e.target.value)}
+                className={`${inputClass} max-w-xs`}
+              />
+              <p className="mt-1 text-[11px] text-amber-700">
+                Quedan {unidadesSaldo} unidad{unidadesSaldo === 1 ? "" : "es"} pendientes. Con esta fecha,
+                el sistema te avisa por la campanita cuando se acerque la entrega o si se atrasa.
+              </p>
             </div>
           )}
           <div className="sm:col-span-2">

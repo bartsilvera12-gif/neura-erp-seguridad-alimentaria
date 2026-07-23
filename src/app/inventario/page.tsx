@@ -4,9 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Search, X, Plus, Package, Coins, AlertTriangle,
-  SlidersHorizontal, ChevronLeft, ChevronRight, PackageSearch, Pencil,
+  SlidersHorizontal, ChevronLeft, ChevronRight, PackageSearch, Pencil, Trash2, Loader2,
 } from "lucide-react";
-import { getProductos } from "@/lib/inventario/storage";
+import { getProductos, eliminarProducto } from "@/lib/inventario/storage";
 import type { Producto } from "@/lib/inventario/types";
 import ExportExcelButton from "@/components/ui/ExportExcelButton";
 import ImportExcelButton from "@/components/ui/ImportExcelButton";
@@ -70,6 +70,12 @@ export default function InventarioPage() {
   const [filtroEstado, setFiltroEstado] = useState<EstadoStock | "">("");
   const [filtroUbicacion, setFiltroUbicacion] = useState("");   // "", "__sin__" o id
   const [filtroPrecio, setFiltroPrecio] = useState<"" | "sin_precio" | "con_precio">("");
+  // Borrado: `aEliminar` abre la confirmación; el servidor decide si el
+  // producto se borra o solo se desactiva (según tenga o no historial).
+  const [aEliminar, setAEliminar] = useState<Producto | null>(null);
+  const [borrando, setBorrando] = useState(false);
+  const [avisoBorrado, setAvisoBorrado] = useState<string | null>(null);
+  const [resultadoBorrado, setResultadoBorrado] = useState<string | null>(null);
   const [filtroBarras, setFiltroBarras] = useState<"" | "con" | "sin">("");
   const [filtroMargen, setFiltroMargen] = useState<"" | "alto" | "medio" | "bajo">("");
   const [verFiltros, setVerFiltros] = useState(false);
@@ -402,6 +408,23 @@ export default function InventarioPage() {
         )}
       </div>
 
+      {/* Resultado del último borrado. Se muestra acá y no como toast para que
+          quede visible: cuando el producto se archiva en vez de borrarse, el
+          usuario tiene que poder leer por qué. */}
+      {resultadoBorrado && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-[#4FAEB2]/30 bg-[#4FAEB2]/5 px-4 py-3 text-sm text-slate-700">
+          <span>{resultadoBorrado}</span>
+          <button
+            type="button"
+            onClick={() => setResultadoBorrado(null)}
+            className="shrink-0 text-slate-400 transition hover:text-slate-600"
+            aria-label="Cerrar aviso"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Listado */}
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
@@ -545,6 +568,17 @@ export default function InventarioPage() {
                           <Pencil className="h-3.5 w-3.5" />
                           Editar
                         </Link>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => { setAvisoBorrado(null); setAEliminar(p); }}
+                            title="Eliminar producto"
+                            aria-label={`Eliminar ${p.nombre}`}
+                            className="ml-1 inline-flex items-center rounded-lg border border-slate-200 p-1.5 text-slate-400 transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -586,6 +620,81 @@ export default function InventarioPage() {
           </div>
         )}
       </div>
+
+      {/* Confirmación de borrado. No promete "eliminar para siempre": el
+          servidor decide segun el historial, y el texto lo explica antes. */}
+      {aEliminar && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => !borrando && setAEliminar(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-600">
+                <Trash2 className="h-5 w-5" />
+              </span>
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold text-slate-900">Eliminar producto</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  <span className="font-medium">{aEliminar.nombre}</span>
+                </p>
+              </div>
+            </div>
+
+            <p className="mt-4 text-sm text-slate-600">
+              Si el producto nunca se usó, se elimina definitivamente. Si ya tiene ventas, compras o
+              movimientos de stock, <span className="font-medium">no se borra</span>: se archiva y deja
+              de aparecer en el listado y en el buscador, para no romper el historial.
+            </p>
+
+            {avisoBorrado && (
+              <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">{avisoBorrado}</p>
+            )}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setAEliminar(null)}
+                disabled={borrando}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={borrando}
+                onClick={async () => {
+                  setBorrando(true);
+                  setAvisoBorrado(null);
+                  const r = await eliminarProducto(aEliminar.id);
+                  setBorrando(false);
+                  if (!r.ok) {
+                    setAvisoBorrado(r.error ?? "No se pudo eliminar.");
+                    return;
+                  }
+                  // Sale del listado en los dos casos (borrado o archivado).
+                  setTodos((prev) => prev.filter((x) => x.id !== aEliminar.id));
+                  setAEliminar(null);
+                  setResultadoBorrado(
+                    r.modo === "desactivado"
+                      ? `"${r.nombre}" se archivó porque tiene ${(r.usos ?? []).join(", ")}. El historial queda intacto.`
+                      : `"${r.nombre}" se eliminó.`
+                  );
+                }}
+                className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-50"
+              >
+                {borrando && <Loader2 className="h-4 w-4 animate-spin" />}
+                {borrando ? "Eliminando…" : "Eliminar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

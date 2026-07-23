@@ -421,3 +421,36 @@ export async function saveMovimiento(
 
   return rowToMovimiento(movData as MovimientoRow);
 }
+
+export interface EliminarProductoResult {
+  ok: boolean;
+  /** "eliminado" = se borró; "desactivado" = tenía historial y se ocultó. */
+  modo?: "eliminado" | "desactivado";
+  nombre?: string;
+  /** Qué lo retiene cuando no se pudo borrar (ej. "3 ventas"). */
+  usos?: string[];
+  error?: string;
+}
+
+/**
+ * Elimina un producto. El servidor decide si lo borra de verdad (nunca se usó)
+ * o si lo desactiva (tiene historial de ventas/compras/movimientos).
+ */
+export async function eliminarProducto(id: string): Promise<EliminarProductoResult> {
+  try {
+    const res = await fetch(`/api/productos/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    const j = (await res.json().catch(() => ({}))) as {
+      success?: boolean;
+      data?: { modo?: "eliminado" | "desactivado"; nombre?: string; usos?: string[] };
+      error?: string;
+    };
+    if (!res.ok || !j.success) return { ok: false, error: j.error ?? `Error ${res.status}` };
+    return { ok: true, modo: j.data?.modo, nombre: j.data?.nombre, usos: j.data?.usos ?? [] };
+  } catch (e) {
+    console.error("[inventario] eliminarProducto:", e);
+    return { ok: false, error: "No se pudo conectar con el servidor." };
+  }
+}

@@ -272,3 +272,98 @@ export async function PATCH(
     return NextResponse.json(errorResponse("No se pudo actualizar el producto."), { status: 500 });
   }
 }
+
+/**
+ * DELETE /api/productos/[id]
+ *
+ * Borrado seguro en dos modos, decidido por los datos y no por el usuario:
+ *
+ *  - Si el producto NUNCA se movió (sin ventas, compras, movimientos de stock,
+ *    órdenes de compra ni recetas) se BORRA de verdad. Lo auxiliar —categorías,
+ *    documentos adjuntos, stock por ubicación, vínculo con proveedores— se va
+ *    solo por las FK en cascada.
+ *
+ *  - Si tiene historial, NO se borra: se DESACTIVA (`activo = false`). Sale del
+ *    listado y del buscador, pero las ventas y compras viejas siguen mostrando
+ *    qué se vendió. Borrarlo de verdad rompería el historial contable; de hecho
+ *    la base lo impide con FK RESTRICT.
+ *
+ * Devuelve `modo: "eliminado" | "desactivado"` y, en el segundo caso, qué lo
+ * retiene, para que la pantalla pueda explicarlo.
+ */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const ctx = await getTenantSupabaseFromAuth(request);
+    if (!ctx) return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
+    const { id } = await params;
+    const empresaId = ctx.auth.empresa_id;
+    const sb = ctx.supabase;
+
+    const { data: prod, error: errProd } = await sb
+      .from("productos")
+      .select("id, nombre, activo")
+      .eq("id", id)
+      .eq("empresa_id", empresaId)
+      .maybeSingle();
+    if (errProd) throw new Error(errProd.message);
+    if (!prod) return NextResponse.json(errorResponse("Producto no encontrado."), { status: 404 });
+
+    // Tablas que la base protege con FK RESTRICT (más órdenes de compra, que no
+    // tiene FK pero igual es historial que no queremos huérfano).
+    const referencias: { tabla: string; columna: string; etiqueta: string }[] = [
+      { tabla: "ventas_items", columna: "producto_id", etiqueta: "ventas" },
+      { tabla: "compras", columna: "producto_id", etiqueta: "compras" },
+      { tabla: "movimientos_inventario", columna: "producto_id", etiqueta: "movimientos de stock" },
+      { tabla: "ordenes_compra", columna: "producto_id", etiqueta: "órdenes de compra" },
+      { tabla: "receta_items", columna: "insumo_producto_id", etiqueta: "recetas" },
+    ];
+
+    const usos: string[] = [];
+    for (const r of referencias) {
+      const { count, error } = await sb
+        .from(r.tabla)
+        .select("*", { count: "exact", head: true })
+        .eq(r.columna, id);
+      // Si una tabla no existe en este tenant, no bloquea el borrado.
+      if (error) continue;
+      if ((count ?? 0) > 0) usos.push(`${count} ${r.etiqueta}`);
+    }
+
+    if (usos.length > 0) {
+      const { error: errUpd } = await sb
+        .from("productos")
+        .update({ activo: false })
+        .eq("id", id)
+        .eq("empresa_id", empresaId);
+      if (errUpd) throw new Error(errUpd.message);
+      return NextResponse.json(
+        successResponse({ modo: "desactivado", nombre: prod.nombre, usos })
+      );
+    }
+
+    const { error: errDel } = await sb
+      .from("productos")
+      .delete()
+      .eq("id", id)
+      .eq("empresa_id", empresaId);
+    if (errDel) {
+      // Red de seguridad: si apareció una referencia entre el chequeo y el
+      // borrado, la FK lo impide. Se degrada a desactivar en vez de fallar.
+      if (/foreign key|violates/i.test(errDel.message)) {
+        await sb.from("productos").update({ activo: false }).eq("id", id).eq("empresa_id", empresaId);
+        return NextResponse.json(
+          successResponse({ modo: "desactivado", nombre: prod.nombre, usos: ["registros asociados"] })
+        );
+      }
+      throw new Error(errDel.message);
+    }
+
+    return NextResponse.json(successResponse({ modo: "eliminado", nombre: prod.nombre, usos: [] }));
+  } catch (err) {
+    console.error("[/api/productos/[id] DELETE]", err instanceof Error ? err.message : err);
+    return NextResponse.json(errorResponse("No se pudo eliminar el producto."), { status: 500 });
+  }
+}

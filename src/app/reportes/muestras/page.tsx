@@ -269,6 +269,7 @@ export default function MuestrasReportePage() {
                     <th className="pb-2 font-medium">Producto</th>
                     <th className="pb-2 font-medium">Cliente</th>
                     <th className="pb-2 font-medium">Responsable</th>
+                    <th className="pb-2 font-medium">Motivo</th>
                     <th className="pb-2 text-right font-medium">Cant.</th>
                     <th className="pb-2 text-right font-medium">Costo unit.</th>
                     <th className="pb-2 text-right font-medium">Costo total</th>
@@ -290,6 +291,9 @@ export default function MuestrasReportePage() {
                         <td className="py-2 pr-3 text-slate-700">{r.producto_nombre}</td>
                         <td className="py-2 pr-3 text-slate-600">{r.cliente ?? "—"}</td>
                         <td className="py-2 pr-3 text-slate-600">{r.usuario ?? "—"}</td>
+                        <td className="py-2 pr-3 max-w-[220px] truncate text-slate-500" title={r.motivo ?? ""}>
+                          {r.motivo ?? "—"}
+                        </td>
                         <td className="py-2 text-right tabular-nums text-slate-700">{r.cantidad.toLocaleString("es-PY")}</td>
                         <td className="py-2 pl-3 text-right tabular-nums text-slate-600">{formatGs(r.costo_unitario)}</td>
                         <td className="py-2 pl-3 text-right tabular-nums font-medium text-slate-800">{formatGs(r.costo_total)}</td>

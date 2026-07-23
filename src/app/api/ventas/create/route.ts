@@ -76,11 +76,10 @@ function asItems(body: unknown): CreateVentaItemInput[] | null {
   if (out.some((i) => i.tipo_salida === "venta" && !(i.precio_venta > 0))) {
     return null;
   }
-  // NOTA: el motivo de las salidas sin cargo ya NO se exige (decision del
-  // cliente: entorpecia la carga en caja). La trazabilidad de la entrega queda
-  // igual por producto, cliente, usuario, fecha y costo en el reporte de
-  // muestras y regalos. `motivo_salida` sigue existiendo en el modelo por si se
-  // retoma, pero llega null.
+  // Muestra/regalo exigen un motivo: sin trazabilidad no se regala stock.
+  if (out.some((i) => i.tipo_salida !== "venta" && !i.motivo_salida)) {
+    return null;
+  }
   return out;
 }
 

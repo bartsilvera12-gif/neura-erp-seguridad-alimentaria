@@ -493,9 +493,11 @@ export default function NuevaVentaPage() {
   // requiere receptor) o si es crédito (necesita CxC). Para "Solo ticket" a
   // consumidor final, la venta puede ir sin cliente.
   const clienteObligatorio = tipoDocumento === "factura" || tipoVenta === "CREDITO";
-  // Una línea cobrada no puede ir a precio 0 (el servidor lo rechaza igual;
-  // acá se evita el viaje y se avisa antes). El motivo de las salidas sin cargo
-  // NO se pide: la trazabilidad queda por producto, cliente, usuario y fecha.
+  // Muestra/regalo exigen motivo, y una línea cobrada no puede ir a precio 0
+  // (el servidor lo rechaza igual; acá se evita el viaje y se avisa antes).
+  const lineasSinMotivo = items.filter(
+    (i) => esSalidaSinCargo(i.tipo_salida) && !(i.motivo_salida ?? "").trim()
+  ).length;
   const lineasCobradasSinPrecio = items.filter(
     (i) => !esSalidaSinCargo(i.tipo_salida) && !(i.precio_venta > 0)
   ).length;
@@ -504,6 +506,7 @@ export default function NuevaVentaPage() {
     items.length > 0 &&
     creditoValido &&
     (!clienteObligatorio || !!clienteId) &&
+    lineasSinMotivo === 0 &&
     lineasCobradasSinPrecio === 0;
 
   // Cliente (opcional) — selección + filtrado del buscador.
@@ -667,6 +670,15 @@ export default function NuevaVentaPage() {
           ? "Para emitir factura electrónica"
           : "Para venta a crédito";
       setErrorVenta(`${motivo} tenés que elegir un cliente. Podés cargarlo rápido desde el buscador de arriba.`);
+      return;
+    }
+    // Salidas sin cargo: el motivo es obligatorio (queda en el reporte de
+    // muestras y regalos y en el movimiento de inventario).
+    if (lineasSinMotivo > 0) {
+      isSubmittingRef.current = false;
+      setErrorVenta(
+        `Indicá el motivo en ${lineasSinMotivo === 1 ? "la línea marcada" : `las ${lineasSinMotivo} líneas marcadas`} como muestra o regalo.`
+      );
       return;
     }
     // Una línea cobrada nunca puede salir en 0: para eso está muestra/regalo.
@@ -1078,6 +1090,20 @@ export default function NuevaVentaPage() {
                                 );
                               })}
                             </div>
+                            {esSalidaSinCargo(item.tipo_salida) && (
+                              <input
+                                type="text"
+                                value={item.motivo_salida ?? ""}
+                                onChange={(e) => updateItemCampo(idx, { motivo_salida: e.target.value })}
+                                placeholder="Motivo (obligatorio)"
+                                className={`mt-1 h-7 w-40 rounded-md border px-2 text-[11px] outline-none ${
+                                  (item.motivo_salida ?? "").trim()
+                                    ? "border-slate-200"
+                                    : "border-amber-300 bg-amber-50"
+                                }`}
+                                aria-label={`Motivo de la salida sin cargo de ${item.producto_nombre}`}
+                              />
+                            )}
                           </td>
                           {/* IVA */}
                           <td className="hidden px-3 py-2.5 md:table-cell">

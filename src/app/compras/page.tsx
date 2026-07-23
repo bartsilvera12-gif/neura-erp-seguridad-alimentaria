@@ -161,6 +161,20 @@ export default function ComprasPage() {
         <p className="mt-0.5 text-xs text-slate-500">Mercadería ya recibida y facturada. Impactó el stock.</p>
       </div>
 
+      {/* Misma navegación que /compras/ordenes. Sin esto se entraba a Compras y
+          no quedaba forma de volver a Órdenes desde la propia pantalla. */}
+      <div className="flex items-center gap-1 border-b border-slate-200">
+        <span className="border-b-2 border-[#4FAEB2] px-4 py-2 text-sm font-semibold text-[#3F8E91]">
+          Compras
+        </span>
+        <Link
+          href="/compras/ordenes"
+          className="border-b-2 border-transparent px-4 py-2 text-sm font-medium text-slate-500 transition-colors hover:text-[#3F8E91]"
+        >
+          Órdenes de compra
+        </Link>
+      </div>
+
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm ring-1 ring-[#4FAEB2]/15 sm:p-5 lg:p-6">
 
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">

@@ -137,24 +137,20 @@ const MENU_STRUCTURE: MenuItem[] = [
   { key: "clientes", slug: "clientes", label: "Clientes", href: "/clientes", icon: Users },
   { key: "pagos", slug: "pagos", label: "Pagos", href: "/pagos", icon: Banknote },
   {
+    // Entrada ÚNICA para todo el circuito de compra. Antes habia dos ("Ordenes
+    // de compra" y "Compras"), y ambas tenian un hijo llamado "Ordenes" que iba
+    // a rutas distintas: imposible de entender desde el menu.
     key: "ordenes_compra",
     slug: "ordenes_compra",
     label: "Órdenes de compra",
     href: "/compras/ordenes",
     icon: ClipboardList,
     children: [
-      { label: "Órdenes", href: "/compras/ordenes" },
+      { label: "Órdenes de compra", href: "/compras/ordenes" },
       { label: "Recibir mercadería", href: "/compras/desde-orden" },
-    ],
-  },
-  {
-    key: "compras",
-    slug: "compras",
-    label: "Compras",
-    href: "/compras",
-    icon: Package,
-    children: [
-      { label: "Órdenes", href: "/compras" },
+      // Las compras ya facturadas (las que impactaron stock). `exactMatch` para
+      // que no se marque activa estando en /compras/ordenes.
+      { label: "Compras registradas", href: "/compras", exactMatch: true },
       { label: "Proveedores", href: "/proveedores" },
     ],
   },
@@ -213,7 +209,7 @@ const MENU_FAMILIES: { id: string; titulo: string; keys: string[] }[] = [
   { id: "inicio", titulo: "Inicio", keys: ["dashboard"] },
   { id: "comercial", titulo: "Comercial", keys: ["clientes", "crm", "gestion-clientes", "ventas", "presupuestos", "comisiones", "planes"] },
   { id: "finanzas", titulo: "Finanzas", keys: ["pagos", "gastos", "notas_credito", "reportes"] },
-  { id: "operaciones", titulo: "Operaciones", keys: ["inventario", "ordenes_compra", "compras", "recetas", "proyectos", "documentos"] },
+  { id: "operaciones", titulo: "Operaciones", keys: ["inventario", "ordenes_compra", "recetas", "proyectos", "documentos"] },
   { id: "omnicanal", titulo: "Omnicanal", keys: ["conversaciones", "conversaciones-finalizadas", "historial-omnicanal", "monitoreo", "campanas"] },
   { id: "marketing", titulo: "Marketing y Automatización", keys: ["marketing", "marketing_ops", "sorteos"] },
   { id: "administracion", titulo: "Administración", keys: ["usuarios", "configuracion"] },

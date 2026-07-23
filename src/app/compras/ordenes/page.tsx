@@ -86,8 +86,13 @@ export default function OrdenesCompraPage() {
             style={{ boxShadow: "0 0 0 3px rgba(79, 174, 178, 0.18)" }} />
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#4FAEB2]">Zentra · Adquisiciones</p>
         </div>
-        <h1 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Compras</h1>
-        <p className="mt-0.5 text-xs text-slate-500">Órdenes de compra a proveedores (sin factura, sin impacto en stock)</p>
+        {/* El titulo nombra la SECCION (que agrupa los dos tabs) y la bajada
+            explica el circuito. Antes decia "Compras" con una bajada que
+            describia solo las ordenes, y se leia contradictorio. */}
+        <h1 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Órdenes de compra</h1>
+        <p className="mt-0.5 text-xs text-slate-500">
+          Pedidos a proveedores. No impactan el stock hasta que registres la recepción de la mercadería.
+        </p>
       </div>
 
       {/* Navegación */}

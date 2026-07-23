@@ -5,8 +5,9 @@ import Link from "next/link";
 import TipoCambioField from "@/components/compras/TipoCambioField";
 import { useRouter } from "next/navigation";
 import { Search, Trash2, Loader2, Plus, ImageIcon } from "lucide-react";
-import { getProveedores } from "@/lib/proveedores/storage";
+import { getProveedores, proveedorExiste, createProveedor } from "@/lib/proveedores/storage";
 import SearchableSelect from "@/components/ui/SearchableSelect";
+import AdjuntosOrdenCompra, { type AdjuntoPendiente } from "@/components/compras/AdjuntosOrdenCompra";
 import { saveOrdenCompra, type OrdenItemPayload } from "@/lib/ordenes-compra/storage";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { aKilos, formatPeso } from "@/lib/inventario/peso";
@@ -88,6 +89,14 @@ export default function NuevaOrdenCompraPage() {
     observacion: "",
   });
   const [lineas, setLineas] = useState<Linea[]>([]);
+  // Archivos ya subidos al bucket que se asocian recien cuando la orden existe.
+  const [adjuntos, setAdjuntos] = useState<AdjuntoPendiente[]>([]);
+  // Alta de proveedor sin salir de la orden: si hay que ir a Proveedores y
+  // volver, se pierde todo lo que se venia cargando.
+  const [nuevoProvOpen, setNuevoProvOpen] = useState(false);
+  const [nuevoProv, setNuevoProv] = useState({ nombre: "", ruc: "", telefono: "" });
+  const [errorProv, setErrorProv] = useState<string | null>(null);
+  const [guardandoProv, setGuardandoProv] = useState(false);
   const [q, setQ] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [hits, setHits] = useState<ComboHit[]>([]);
@@ -140,6 +149,35 @@ export default function NuevaOrdenCompraPage() {
 
   const excluidos = useMemo(() => new Set(lineas.map((l) => l.producto_id)), [lineas]);
   const resultados = useMemo(() => hits.filter((p) => !excluidos.has(p.id)), [hits, excluidos]);
+
+  async function handleCrearProveedor() {
+    const nombre = nuevoProv.nombre.trim();
+    const ruc = nuevoProv.ruc.trim();
+    if (!nombre || !ruc) return;
+    setErrorProv(null);
+    setGuardandoProv(true);
+    try {
+      const dup = await proveedorExiste(ruc);
+      if (dup) { setErrorProv(`RUC ya registrado para "${dup.nombre}".`); return; }
+      const r = await createProveedor({
+        nombre: nombre.toUpperCase(),
+        ruc,
+        telefono: nuevoProv.telefono.trim(),
+        email: "",
+        contacto: "",
+        direccion: "",
+        estado: "activo",
+      });
+      if (!r.ok) { setErrorProv(r.error); return; }
+      const lista = await getProveedores().catch(() => [] as Proveedor[]);
+      setProveedores(lista);
+      setCab((p) => ({ ...p, proveedor_id: String(r.proveedor.id) }));
+      setNuevoProvOpen(false);
+      setNuevoProv({ nombre: "", ruc: "", telefono: "" });
+    } finally {
+      setGuardandoProv(false);
+    }
+  }
 
   function addProducto(p: ComboHit) {
     setLineas((prev) => {
@@ -247,6 +285,25 @@ export default function NuevaOrdenCompraPage() {
         items
       );
       if (!res.success) { setErr(res.error); return; }
+
+      // Los archivos ya estaban subidos al bucket; recien ahora existe la orden
+      // a la cual asociarlos. Si esto falla NO se pierde la orden: se avisa y
+      // los documentos se pueden volver a adjuntar desde el detalle.
+      if (adjuntos.length > 0) {
+        try {
+          await fetchWithSupabaseSession(
+            `/api/ordenes-compra/${encodeURIComponent(res.numero_oc)}/documentos`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ documentos: adjuntos }),
+            }
+          );
+        } catch (e) {
+          console.error("[oc-nueva] no se pudieron asociar los adjuntos:", e);
+        }
+      }
+
       router.push(`/compras/ordenes/${encodeURIComponent(res.numero_oc)}`);
     } finally {
       setEnviando(false);
@@ -280,6 +337,57 @@ export default function NuevaOrdenCompraPage() {
                 placeholder="Buscar proveedor…"
                 emptyText="Sin proveedores que coincidan"
               />
+              {!nuevoProvOpen ? (
+                <button
+                  type="button"
+                  onClick={() => { setErrorProv(null); setNuevoProvOpen(true); }}
+                  className="mt-1.5 text-xs font-semibold text-[#4FAEB2] transition-colors hover:text-[#3F8E91]"
+                >
+                  + Nuevo proveedor
+                </button>
+              ) : (
+                <div className="mt-2 rounded-lg border border-[#4FAEB2]/30 bg-[#4FAEB2]/5 p-3">
+                  <p className="mb-2 text-xs font-semibold text-slate-700">Nuevo proveedor</p>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <input
+                      value={nuevoProv.nombre}
+                      onChange={(e) => setNuevoProv((p) => ({ ...p, nombre: e.target.value }))}
+                      placeholder="Nombre / Razón social *"
+                      className={`${inputClass} uppercase sm:col-span-2`}
+                    />
+                    <input
+                      value={nuevoProv.ruc}
+                      onChange={(e) => setNuevoProv((p) => ({ ...p, ruc: e.target.value }))}
+                      placeholder="RUC *"
+                      className={inputClass}
+                    />
+                    <input
+                      value={nuevoProv.telefono}
+                      onChange={(e) => setNuevoProv((p) => ({ ...p, telefono: e.target.value }))}
+                      placeholder="Teléfono (opcional)"
+                      className={`${inputClass} sm:col-span-3`}
+                    />
+                  </div>
+                  {errorProv && <p className="mt-1.5 text-xs text-red-600">{errorProv}</p>}
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCrearProveedor}
+                      disabled={guardandoProv || !nuevoProv.nombre.trim() || !nuevoProv.ruc.trim()}
+                      className="rounded-lg bg-[#4FAEB2] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#3F8E91] disabled:opacity-50"
+                    >
+                      {guardandoProv ? "Guardando…" : "Guardar proveedor"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setNuevoProvOpen(false); setErrorProv(null); }}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-white"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-600">Moneda</label>
@@ -359,6 +467,15 @@ export default function NuevaOrdenCompraPage() {
               <label className="mb-1 block text-xs font-semibold text-slate-600">Observación <span className="font-normal text-slate-400">(opcional)</span></label>
               <input value={cab.observacion} onChange={(e) => setCab((p) => ({ ...p, observacion: e.target.value }))} className={inputClass} placeholder="Notas de la orden…" />
             </div>
+          </div>
+
+          {/* Documentacion del pedido. Los archivos se suben ya mismo al bucket
+              y se asocian a la orden cuando esta se crea. */}
+          <div className="mt-5 border-t border-slate-100 pt-5">
+            <label className="mb-2 block text-xs font-semibold text-slate-600">
+              Documentación <span className="font-normal text-slate-400">(opcional)</span>
+            </label>
+            <AdjuntosOrdenCompra numeroOc={null} onPendientesChange={setAdjuntos} />
           </div>
         </div>
 

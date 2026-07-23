@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { getOrdenCompra, cancelarOrdenCompra } from "@/lib/ordenes-compra/storage";
 import type { OrdenCompra, EstadoOrdenCompra } from "@/lib/ordenes-compra/types";
+import AdjuntosOrdenCompra from "@/components/compras/AdjuntosOrdenCompra";
 
 function fmtGs(v: number) {
   return `Gs. ${Math.round(v).toLocaleString("es-PY")}`;
@@ -167,6 +168,12 @@ export default function OrdenCompraDetallePage() {
             </tr>
           </tfoot>
         </table>
+      </div>
+
+      {/* Documentacion de la orden (proforma, packing list, despacho). */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="mb-3 text-sm font-semibold text-slate-800">Documentación</h2>
+        <AdjuntosOrdenCompra numeroOc={numeroOc} />
       </div>
 
       {/* Cancelar OC: un solo modal que confirma y pide el motivo. */}

@@ -208,16 +208,24 @@ export type NuevoProspectoData = Omit<
   "id" | "numero_control" | "notas" | "fecha_creacion" | "fecha_actualizacion"
 >;
 
-/** Crea prospecto vía API tenant (mismo mecanismo que el listado; evita RLS del browser en `erp_*`). */
+/**
+ * Crea prospecto vía API tenant (mismo mecanismo que el listado; evita RLS del browser en `erp_*`).
+ *
+ * Lanza `Error` con el motivo real cuando falla. Antes devolvía `null` y el
+ * formulario se quedaba mudo: el usuario apretaba "Guardar" y no pasaba nada.
+ */
 export async function saveProspecto(
   datos: NuevoProspectoData
-): Promise<Prospecto | null> {
-  if (typeof window === "undefined") return null;
+): Promise<Prospecto> {
+  if (typeof window === "undefined") {
+    throw new Error("saveProspecto solo puede ejecutarse en el navegador");
+  }
   const usuario = await getCurrentUser();
   if (!usuario?.empresa_id) throw new Error("Usuario no autenticado o sin empresa");
 
+  let res: Response;
   try {
-    const res = await fetchWithSupabaseSession("/api/crm/prospectos", {
+    res = await fetchWithSupabaseSession("/api/crm/prospectos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -234,17 +242,26 @@ export async function saveProspecto(
         observaciones: datos.observaciones?.trim() || null,
       }),
     });
-    const json = (await res.json()) as { success?: boolean; data?: Prospecto; error?: string };
-    if (!res.ok) {
-      console.error("[crm] saveProspecto API:", res.status, json.error);
-      return null;
-    }
-    if (!json.success || !json.data) return null;
-    return json.data;
   } catch (e) {
     console.error("[crm] saveProspecto:", e);
-    return null;
+    throw new Error("No se pudo conectar con el servidor. Revisá tu conexión y reintentá.");
   }
+
+  // Un 401/502 puede responder HTML o cuerpo vacío: `res.json()` explota y el
+  // motivo real se perdía.
+  const json = (await res
+    .json()
+    .catch(() => ({}))) as { success?: boolean; data?: Prospecto; error?: string };
+
+  if (!res.ok) {
+    console.error("[crm] saveProspecto API:", res.status, json.error);
+    if (res.status === 401) throw new Error("Tu sesión expiró. Volvé a iniciar sesión.");
+    throw new Error(json.error || `No se pudo guardar el prospecto (error ${res.status}).`);
+  }
+  if (!json.success || !json.data) {
+    throw new Error(json.error || "El servidor no devolvió el prospecto creado.");
+  }
+  return json.data;
 }
 
 /** Crea prospecto desde webhook (WhatsApp, n8n, etc.). Usa service role para bypass RLS. */
@@ -313,12 +330,38 @@ export async function saveProspectoFromWebhook(datos: {
   return rowToProspecto(prospecto, []);
 }
 
-/** Actualiza prospecto vía API tenant (Postgres directo en schemas `erp_*` no expuestos). */
+/**
+ * Traduce una respuesta de la API CRM a `Error` con el motivo real, o devuelve
+ * el dato. Centralizado para que ninguna acción del funnel falle en silencio.
+ */
+async function leerRespuestaCrm<T>(res: Response, accion: string): Promise<T> {
+  const json = (await res
+    .json()
+    .catch(() => ({}))) as { success?: boolean; data?: T; error?: string };
+
+  if (!res.ok) {
+    console.error(`[crm] ${accion} API:`, res.status, json.error);
+    if (res.status === 401) throw new Error("Tu sesión expiró. Volvé a iniciar sesión.");
+    if (res.status === 404) throw new Error("El prospecto ya no existe o no tenés acceso.");
+    throw new Error(json.error || `${accion} falló (error ${res.status}).`);
+  }
+  if (!json.success || json.data === undefined || json.data === null) {
+    throw new Error(json.error || `${accion}: el servidor no devolvió datos.`);
+  }
+  return json.data;
+}
+
+/**
+ * Actualiza prospecto vía API tenant (Postgres directo en schemas `erp_*` no expuestos).
+ * Lanza `Error` si falla: antes devolvía `null` y la UI no se enteraba.
+ */
 export async function updateProspecto(
   id: string,
   datos: Partial<Omit<Prospecto, "id" | "numero_control" | "notas" | "fecha_creacion">>
-): Promise<Prospecto | null> {
-  if (typeof window === "undefined") return null;
+): Promise<Prospecto> {
+  if (typeof window === "undefined") {
+    throw new Error("updateProspecto solo puede ejecutarse en el navegador");
+  }
 
   const patch: Record<string, unknown> = {};
   if (datos.empresa !== undefined) patch.empresa = datos.empresa;
@@ -332,49 +375,47 @@ export async function updateProspecto(
   if (datos.fecha_proxima_accion !== undefined) patch.fecha_proxima_accion = datos.fecha_proxima_accion ?? null;
   // creado_por no se actualiza: queda fijo con quien creó el lead
   if (datos.responsable !== undefined) patch.responsable = datos.responsable ?? null;
+  // La API acepta `observaciones` desde siempre, pero acá no se reenviaba: los
+  // comentarios internos editados en el detalle se perdían sin aviso.
+  if (datos.observaciones !== undefined) patch.observaciones = datos.observaciones ?? null;
   if (datos.cliente_creado !== undefined) patch.cliente_creado = datos.cliente_creado;
   patch.fecha_actualizacion = new Date().toISOString();
 
+  let res: Response;
   try {
-    const res = await fetchWithSupabaseSession(`/api/crm/prospectos/${encodeURIComponent(id)}`, {
+    res = await fetchWithSupabaseSession(`/api/crm/prospectos/${encodeURIComponent(id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
-    const json = (await res.json()) as { success?: boolean; data?: Prospecto; error?: string };
-    if (!res.ok) {
-      console.error("[crm] updateProspecto API:", res.status, json.error);
-      return null;
-    }
-    if (!json.success || !json.data) return null;
-    return json.data;
   } catch (e) {
     console.error("[crm] updateProspecto:", e);
-    return null;
+    throw new Error("No se pudo conectar con el servidor. Revisá tu conexión y reintentá.");
   }
+  return leerRespuestaCrm<Prospecto>(res, "Actualizar prospecto");
 }
 
-/** Cambia la etapa del prospecto. */
+/** Cambia la etapa del prospecto. Lanza si el servidor rechaza el cambio. */
 export async function moveProspecto(
   id: string,
   etapa: string
-): Promise<void> {
-  await updateProspecto(id, { etapa });
+): Promise<Prospecto> {
+  return updateProspecto(id, { etapa });
 }
 
 // ─── Notas ─────────────────────────────────────────────────────────────────────
 
-/** Agrega una nota al prospecto (API tenant). */
-export async function addNota(
-  prospectoId: string,
-  texto: string
-): Promise<Nota | null> {
-  if (typeof window === "undefined") return null;
+/** Agrega una nota al prospecto (API tenant). Lanza si no se pudo guardar. */
+export async function addNota(prospectoId: string, texto: string): Promise<Nota> {
+  if (typeof window === "undefined") {
+    throw new Error("addNota solo puede ejecutarse en el navegador");
+  }
   const usuario = await getCurrentUser();
   if (!usuario?.empresa_id) throw new Error("Usuario no autenticado o sin empresa");
 
+  let res: Response;
   try {
-    const res = await fetchWithSupabaseSession(
+    res = await fetchWithSupabaseSession(
       `/api/crm/prospectos/${encodeURIComponent(prospectoId)}/notas`,
       {
         method: "POST",
@@ -382,31 +423,32 @@ export async function addNota(
         body: JSON.stringify({ texto: texto.trim() }),
       }
     );
-    const json = (await res.json()) as { success?: boolean; data?: Nota; error?: string };
-    if (!res.ok) {
-      console.error("[crm] addNota API:", res.status, json.error);
-      return null;
-    }
-    if (!json.success || !json.data) return null;
-    return json.data;
   } catch (e) {
     console.error("[crm] addNota:", e);
-    return null;
+    throw new Error("No se pudo conectar con el servidor. Revisá tu conexión y reintentá.");
   }
+  return leerRespuestaCrm<Nota>(res, "Agregar nota");
 }
 
-/** Elimina un prospecto (y sus notas por CASCADE), vía API tenant. */
+/**
+ * Elimina un prospecto (y sus notas por CASCADE), vía API tenant.
+ * Lanza si falla: antes se cerraba el modal como si se hubiera borrado.
+ */
 export async function deleteProspecto(id: string): Promise<void> {
   if (typeof window === "undefined") return;
+  let res: Response;
   try {
-    const res = await fetchWithSupabaseSession(`/api/crm/prospectos/${encodeURIComponent(id)}`, {
+    res = await fetchWithSupabaseSession(`/api/crm/prospectos/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
-    if (!res.ok) {
-      const t = await res.text().catch(() => "");
-      console.error("[crm] deleteProspecto API:", res.status, t);
-    }
   } catch (e) {
     console.error("[crm] deleteProspecto:", e);
+    throw new Error("No se pudo conectar con el servidor. Revisá tu conexión y reintentá.");
+  }
+  if (!res.ok) {
+    const json = (await res.json().catch(() => ({}))) as { error?: string };
+    console.error("[crm] deleteProspecto API:", res.status, json.error);
+    if (res.status === 401) throw new Error("Tu sesión expiró. Volvé a iniciar sesión.");
+    throw new Error(json.error || `No se pudo eliminar el prospecto (error ${res.status}).`);
   }
 }

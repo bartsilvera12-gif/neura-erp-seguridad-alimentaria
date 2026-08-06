@@ -88,17 +88,17 @@ export async function POST(request: NextRequest) {
 
     const empresa = typeof body.empresa === "string" ? body.empresa.trim() : "";
     const contacto = typeof body.contacto === "string" ? body.contacto.trim() : "";
-    const servicio = typeof body.servicio === "string" ? body.servicio.trim() : "";
-    const etapa = typeof body.etapa === "string" ? body.etapa.trim() : "LEAD";
+    // El producto de interés se define al avanzar el lead: exigirlo en el alta
+    // bloqueaba cargar prospectos cuando el inventario todavía está vacío.
+    const servicio =
+      (typeof body.servicio === "string" ? body.servicio.trim() : "") || "Sin especificar";
+    const etapa = (typeof body.etapa === "string" ? body.etapa.trim() : "") || "LEAD";
 
     if (!empresa) {
       return NextResponse.json(errorResponse("empresa es obligatoria"), { status: 400 });
     }
     if (!contacto) {
       return NextResponse.json(errorResponse("contacto es obligatorio"), { status: 400 });
-    }
-    if (!servicio) {
-      return NextResponse.json(errorResponse("servicio es obligatorio"), { status: 400 });
     }
 
     const sb = ctx.supabase;

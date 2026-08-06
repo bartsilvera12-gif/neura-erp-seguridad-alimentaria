@@ -403,9 +403,14 @@ function NuevoClienteForm() {
       }
     }
 
-    // Marcar prospecto CRM como cliente_creado
+    // Marcar prospecto CRM como cliente_creado. Best-effort a propósito: el
+    // cliente ya existe, y que falle este flag no debe frenar la navegación.
     if (form.prospecto_id) {
-      await updateProspecto(form.prospecto_id, { cliente_creado: true });
+      try {
+        await updateProspecto(form.prospecto_id, { cliente_creado: true });
+      } catch (err) {
+        console.error("[clientes] marcar prospecto como cliente_creado:", err);
+      }
     }
 
     setGuardando(false);

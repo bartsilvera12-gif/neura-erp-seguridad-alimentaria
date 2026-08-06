@@ -1061,6 +1061,8 @@ export default function CrmPage() {
   const dragIdRef = useRef<string | null>(null);
 
   const [cargando, setCargando] = useState(true);
+  /** Error de una acción del board (mover etapa, drag & drop). */
+  const [errorAccion, setErrorAccion] = useState<string | null>(null);
 
   function recargar() {
     Promise.all([
@@ -1080,18 +1082,17 @@ export default function CrmPage() {
   async function handleDrop(e: React.DragEvent, etapaCodigo: string) {
     e.preventDefault();
     const id = e.dataTransfer.getData("text/plain");
-    if (id) {
-      await moveProspecto(id, etapaCodigo);
-      recargar();
-    }
     setDragOverEtapa(null);
     dragIdRef.current = null;
+    if (!id) return;
+    await handleMoverEtapa(id, etapaCodigo);
   }
 
   async function handleMoverEtapa(id: string, etapaCodigo: string) {
     // Optimistic update: la carta se mueve al instante a la nueva etapa.
-    // Si el servidor falla, recargar() abajo restaura el estado real.
+    // Si el servidor falla, se revierte y se avisa.
     const previo = prospectos;
+    setErrorAccion(null);
     setProspectos((prev) =>
       prev.map((p) =>
         String(p.id) === String(id) ? { ...p, etapa: etapaCodigo } : p,
@@ -1104,6 +1105,11 @@ export default function CrmPage() {
     } catch (err) {
       console.error("[crm-funnel] handleMoverEtapa:", err);
       setProspectos(previo); // rollback inmediato
+      setErrorAccion(
+        err instanceof Error && err.message
+          ? err.message
+          : "No se pudo mover el prospecto de etapa.",
+      );
       recargar(); // y resync con el servidor
     }
   }
@@ -1222,6 +1228,24 @@ export default function CrmPage() {
           </button>
         </div>
       </div>
+
+      {errorAccion ? (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+        >
+          <span aria-hidden="true">⚠</span>
+          <span className="flex-1 font-medium">{errorAccion}</span>
+          <button
+            type="button"
+            onClick={() => setErrorAccion(null)}
+            className="shrink-0 text-rose-400 hover:text-rose-700"
+            aria-label="Cerrar aviso"
+          >
+            ✕
+          </button>
+        </div>
+      ) : null}
 
       {/* KPIs premium (la vista angosta ya muestra su propio KPI de pipeline) */}
       <div className="hidden grid-cols-2 gap-3 sm:grid-cols-3 md:grid lg:grid-cols-5">

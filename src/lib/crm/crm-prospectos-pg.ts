@@ -319,6 +319,38 @@ export async function insertProspectoForEmpresaPg(
   }
 }
 
+/**
+ * Alta de nota en el schema tenant. La ruta de notas iba siempre por PostgREST,
+ * que no expone `erp_*`: en esos tenants agregar una nota fallaba aunque el
+ * detalle del prospecto se leyera bien (ese sí usa Postgres directo).
+ */
+export async function insertNotaForEmpresaPg(
+  pool: Pool,
+  tenantDataSchema: string,
+  empresaId: string,
+  prospectoId: string,
+  texto: string
+): Promise<Nota | null> {
+  const resolved = await resolveCrmProspectosSchemaForTenant(pool, tenantDataSchema);
+  if (!resolved) return null;
+  const sch = assertAllowedChatDataSchema(resolved.crmSchema);
+  const cn = quoteSchemaTable(sch, "crm_notas");
+
+  try {
+    const r = await pool.query(
+      `INSERT INTO ${cn} (empresa_id, prospecto_id, texto)
+       VALUES ($1::uuid, $2::uuid, $3::text)
+       RETURNING *`,
+      [empresaId, prospectoId, texto]
+    );
+    const row = r.rows[0] as ProspectoRowPg | undefined;
+    return row ? rowToNotaPg(row) : null;
+  } catch (e) {
+    console.error("[crm-prospectos-pg] insert_nota:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
 export async function updateProspectoForEmpresaPg(
   pool: Pool,
   tenantDataSchema: string,

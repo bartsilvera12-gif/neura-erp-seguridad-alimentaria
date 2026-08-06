@@ -3,6 +3,13 @@ import { getTenantSupabaseFromAuth } from "@/lib/supabase/tenant-api";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
 import { resolveCrmScope, puedeAccederProspecto } from "@/lib/crm/server/crm-scope";
+import { fetchDataSchemaForEmpresaId } from "@/lib/supabase/empresa-data-schema";
+import { getChatPostgresPool } from "@/lib/supabase/chat-pg-pool";
+import { isLikelyUnexposedTenantChatSchema } from "@/lib/supabase/chat-data-schema";
+import {
+  getProspectoForEmpresaPg,
+  insertNotaForEmpresaPg,
+} from "@/lib/crm/crm-prospectos-pg";
 
 interface NotaRow {
   id: string;
@@ -33,6 +40,28 @@ export async function POST(
       return NextResponse.json(errorResponse("texto es obligatorio"), { status: 400 });
     }
 
+    // Escribir una nota es tocar el lead: mismo scope que ver o editar.
+    const scope = await resolveCrmScope(request);
+    if (!scope) {
+      return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
+    }
+
+    // Los tenants `erp_*` no están expuestos vía PostgREST: acá se usa la misma
+    // vía Postgres directa que el detalle del prospecto.
+    const dataSchema = await fetchDataSchemaForEmpresaId(empresaId);
+    const pool = getChatPostgresPool();
+    if (pool && isLikelyUnexposedTenantChatSchema(dataSchema)) {
+      const actual = await getProspectoForEmpresaPg(pool, dataSchema, empresaId, prospectoId);
+      if (!actual || !puedeAccederProspecto(actual, scope)) {
+        return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
+      }
+      const nota = await insertNotaForEmpresaPg(pool, dataSchema, empresaId, prospectoId, texto);
+      if (!nota) {
+        return NextResponse.json(errorResponse("No se pudo guardar la nota"), { status: 400 });
+      }
+      return NextResponse.json(successResponse(nota));
+    }
+
     const { data: pros, error: errP } = await ctx.supabase
       .from("crm_prospectos")
       .select("id, responsable_usuario_id")
@@ -45,12 +74,6 @@ export async function POST(
     }
     if (!pros) {
       return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });
-    }
-
-    // Escribir una nota es tocar el lead: mismo scope que ver o editar.
-    const scope = await resolveCrmScope(request);
-    if (!scope) {
-      return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
     }
     if (!puedeAccederProspecto(pros as { responsable_usuario_id?: string | null }, scope)) {
       return NextResponse.json(errorResponse("Prospecto no encontrado"), { status: 404 });

@@ -7,7 +7,12 @@ import { getEtapas } from "@/lib/crm/etapas";
 import { getCurrentUser } from "@/lib/auth";
 import { getProductos } from "@/lib/inventario/storage";
 import ProductoInteresSelector from "@/components/crm/ProductoInteresSelector";
-import { cleanTelefono, formatTelefonoDisplay, isValidTelefono } from "@/lib/telefono";
+import {
+  cleanTelefono,
+  formatTelefonoDisplay,
+  isTelefonoPlausible,
+  normalizeTelefonoInput,
+} from "@/lib/telefono";
 import type { EtapaCrm } from "@/lib/crm/etapas";
 import type { Producto } from "@/lib/inventario/types";
 
@@ -79,14 +84,15 @@ export default function ProspectoNuevoForm({
   }, []);
 
   useEffect(() => {
-    getEtapas().then((e) => {
-      setEtapas(e);
-      if (e.length > 0 && !form.etapa) {
+    getEtapas()
+      .then((e) => {
+        setEtapas(e);
+        // Si el tenant todavía no tiene etapas configuradas, igual dejamos
+        // guardar en LEAD; antes el select quedaba vacío y el alta era imposible.
         const inicial = e.find((x) => x.codigo === "LEAD") ?? e[0];
-        setForm((prev) => ({ ...prev, etapa: inicial.codigo }));
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        setForm((prev) => ({ ...prev, etapa: prev.etapa || inicial?.codigo || "LEAD" }));
+      })
+      .catch(() => setForm((prev) => ({ ...prev, etapa: prev.etapa || "LEAD" })));
   }, []);
 
   useEffect(() => {
@@ -122,8 +128,7 @@ export default function ProspectoNuevoForm({
     const { name, value } = e.target;
     const type = (e.target as HTMLInputElement).type;
     if (name === "telefono") {
-      const raw = cleanTelefono(value);
-      setForm((prev) => ({ ...prev, telefono: raw }));
+      setForm((prev) => ({ ...prev, telefono: normalizeTelefonoInput(value) }));
       return;
     }
     const upper = ["empresa", "contacto", "responsable"];
@@ -164,12 +169,8 @@ export default function ProspectoNuevoForm({
 
     if (!form.empresa.trim()) return setError("La empresa es obligatoria.");
     if (!form.contacto.trim()) return setError("El contacto es obligatorio.");
-    if (form.productoIds.length === 0) return setError("Seleccioná al menos un producto de interés.");
-    if (!form.etapa) return setError("Seleccioná una etapa.");
-    if (form.telefono && !isValidTelefono(form.telefono)) {
-      return setError(
-        "Número inválido. Usá formato local 0981100453 o internacional +595981100453.",
-      );
+    if (form.telefono && !isTelefonoPlausible(form.telefono)) {
+      return setError("Número incompleto. Ej: 0981 100 453 o 021 123 456.");
     }
 
     setSaving(true);
@@ -182,22 +183,27 @@ export default function ProspectoNuevoForm({
         contacto: form.contacto.trim().toUpperCase(),
         email: form.email.trim() || undefined,
         telefono: telefonoGuardar,
-        servicio: servicioTexto,
+        // Sin productos elegidos el lead igual se carga; el interés se precisa
+        // más adelante desde el detalle.
+        servicio: servicioTexto || "Sin especificar",
         valor_estimado: valorEstimadoNum,
-        etapa: form.etapa,
+        etapa: form.etapa || "LEAD",
         proxima_accion: form.proxima_accion.trim() || undefined,
         fecha_proxima_accion: form.fecha_proxima_accion || undefined,
         responsable: form.responsable.trim().toUpperCase() || undefined,
         observaciones: form.observaciones.trim() || null,
       });
 
-      if (guardado) {
-        const id =
-          guardado && typeof guardado === "object" && "id" in guardado
-            ? ((guardado as { id?: string }).id ?? undefined)
-            : undefined;
-        onCreated?.(id);
-      }
+      onCreated?.(guardado.id);
+    } catch (err) {
+      // Sin esto el botón volvía a "Guardar prospecto" sin decir nada y el
+      // usuario no sabía si el lead se había cargado.
+      console.error("[crm] alta prospecto:", err);
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : "No se pudo guardar el prospecto. Reintentá en unos segundos.",
+      );
     } finally {
       setSaving(false);
     }
@@ -269,8 +275,8 @@ export default function ProspectoNuevoForm({
                   className={INPUT_CLS}
                   autoComplete="off"
                   list="telefono-sugerencias"
-                  inputMode="numeric"
-                  maxLength={12}
+                  inputMode="tel"
+                  maxLength={20}
                 />
                 <datalist id="telefono-sugerencias">
                   {telefonosHistorial.map((t) => (
@@ -317,7 +323,10 @@ export default function ProspectoNuevoForm({
           <div className="space-y-4">
             <div>
               <label className={LABEL_CLS}>
-                Productos de interés <span className="text-rose-500">*</span>
+                Productos de interés{" "}
+                <span className="font-normal normal-case tracking-normal text-slate-400">
+                  (opcional)
+                </span>
               </label>
               {cargandoProductos ? (
                 <p className="py-2 text-sm text-slate-400">Cargando productos…</p>
@@ -325,7 +334,7 @@ export default function ProspectoNuevoForm({
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                   <p className="font-medium">No hay productos cargados todavía.</p>
                   <p className="mt-1 text-amber-700">
-                    Cargá productos en el inventario para poder elegirlos como interés del lead.
+                    Podés guardar el prospecto igual y elegir el producto más adelante.
                   </p>
                   <Link
                     href="/inventario/nuevo"
@@ -383,13 +392,18 @@ export default function ProspectoNuevoForm({
                   className={SELECT_CLS}
                   style={CHEVRON_STYLE}
                 >
-                  {etapas
-                    .filter((e) => e.codigo !== "GANADO" && e.codigo !== "PERDIDO")
-                    .map((e) => (
-                      <option key={e.id} value={e.codigo}>
-                        {e.nombre}
-                      </option>
-                    ))}
+                  {etapas.length === 0 ? (
+                    // Tenant sin etapas configuradas: el alta sigue disponible en LEAD.
+                    <option value="LEAD">Lead</option>
+                  ) : (
+                    etapas
+                      .filter((e) => e.codigo !== "GANADO" && e.codigo !== "PERDIDO")
+                      .map((e) => (
+                        <option key={e.id} value={e.codigo}>
+                          {e.nombre}
+                        </option>
+                      ))
+                  )}
                 </select>
               </div>
             </div>

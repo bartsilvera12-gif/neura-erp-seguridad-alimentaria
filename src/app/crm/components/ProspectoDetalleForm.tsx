@@ -9,7 +9,8 @@ import {
   moveProspecto,
   updateProspecto,
 } from "@/lib/crm/storage";
-import { getEtapas, getEtapaClasses } from "@/lib/crm/etapas";
+import { getEtapas, getEtapaClasses, normalizeEtapaCodigo } from "@/lib/crm/etapas";
+import { cleanTelefono, formatTelefonoDisplay, isTelefonoPlausible, normalizeTelefonoInput } from "@/lib/telefono";
 import { getProductos } from "@/lib/inventario/storage";
 import ProductoInteresSelector from "@/components/crm/ProductoInteresSelector";
 import { getBrowserSupabaseForEmpresaData } from "@/lib/supabase/browser-data-client";
@@ -28,6 +29,13 @@ export type ProspectoDetalleFormProps = {
 const INPUT_CLS =
   "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm transition-colors hover:border-[#4FAEB2]/60 focus:border-[#4FAEB2] focus:outline-none focus:ring-2 focus:ring-[#4FAEB2]/20";
 const LABEL_CLS = "block text-xs font-medium uppercase tracking-wide text-slate-500 mb-1.5";
+/** Texto que usa el alta cuando todavía no se eligió producto. */
+const PLACEHOLDER_SERVICIO = "Sin especificar";
+
+/** Mensaje mostrable a partir de lo que lanzó la capa de storage. */
+function mensajeDeError(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
@@ -110,6 +118,10 @@ export default function ProspectoDetalleForm({
   const [valorEstimado, setValorEstimado] = useState("");
   const [valorEditado, setValorEditado] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  /** Interés guardado que no corresponde a ningún producto del inventario. */
+  const [serviciosLibres, setServiciosLibres] = useState<string[]>([]);
+  /** Recién cuando el selector se sincronizó con lo guardado se puede reescribir `servicio`. */
+  const [servicioSync, setServicioSync] = useState(false);
 
   useEffect(() => {
     getEtapas().then(setEtapas);
@@ -123,17 +135,26 @@ export default function ProspectoDetalleForm({
   }, []);
 
   useEffect(() => {
-    if (!prospecto || productos.length === 0) return;
+    if (!prospecto || cargandoProductos) return;
     const nombres = prospecto.servicio.split(",").map((s) => s.trim()).filter(Boolean);
-    const ids = nombres
-      .map((n) => productos.find((p) => p.nombre === n)?.id)
-      .filter((pid): pid is string => Boolean(pid));
+    const ids: string[] = [];
+    const libres: string[] = [];
+    for (const n of nombres) {
+      const pid = productos.find((p) => p.nombre === n)?.id;
+      if (pid) ids.push(pid);
+      else if (n.toLowerCase() !== PLACEHOLDER_SERVICIO.toLowerCase()) libres.push(n);
+    }
     setForm((prev) => ({ ...prev, productoIds: ids }));
+    // Nombres que no matchean ningún producto (inventario vacío, producto
+    // renombrado o borrado, texto cargado a mano) se conservan: antes el guardado
+    // los pisaba con "" y el interés del lead se perdía.
+    setServiciosLibres(libres);
+    setServicioSync(true);
     // El valor guardado manda: se muestra tal cual y no se pisa al togglear.
     setValorEstimado(prospecto.valor_estimado > 0 ? String(Math.round(prospecto.valor_estimado)) : "");
     setValorEditado(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prospecto?.id, prospecto?.servicio, productos]);
+  }, [prospecto?.id, prospecto?.servicio, productos, cargandoProductos]);
 
   useEffect(() => {
     async function loadConversationId() {
@@ -224,6 +245,10 @@ export default function ProspectoDetalleForm({
     setErrorForm(null);
     const { name, value } = e.target;
     const type = (e.target as HTMLInputElement).type;
+    if (name === "telefono") {
+      setForm((prev) => ({ ...prev, telefono: normalizeTelefonoInput(value) }));
+      return;
+    }
     const upper = ["empresa", "contacto", "responsable"];
     let normalized = value;
     if (name === "email" || type === "email") normalized = value.toLowerCase();
@@ -257,55 +282,84 @@ export default function ProspectoDetalleForm({
     if (!form.empresa.trim()) return setErrorForm("La empresa es obligatoria.");
     if (!form.contacto.trim()) return setErrorForm("El contacto es obligatorio.");
 
-    const servicioTexto = form.productoIds
+    if (form.telefono.trim() && !isTelefonoPlausible(form.telefono)) {
+      return setErrorForm("Número incompleto. Ej: 0981 100 453 o 021 123 456.");
+    }
+
+    const nombresElegidos = form.productoIds
       .map((pid) => productos.find((p) => p.id === pid)?.nombre)
-      .filter(Boolean)
-      .join(", ");
+      .filter((n): n is string => Boolean(n));
+    const servicioTexto = [...nombresElegidos, ...serviciosLibres].join(", ");
 
     setSaving(true);
     try {
-      const actualizado = await updateProspecto(id, {
+      await updateProspecto(id, {
         empresa: form.empresa.trim().toUpperCase(),
         contacto: form.contacto.trim().toUpperCase(),
         email: form.email.trim() || undefined,
-        telefono: form.telefono.trim() || undefined,
-        servicio: servicioTexto,
+        telefono: form.telefono.trim() ? cleanTelefono(form.telefono) : undefined,
+        // Sin sincronizar el selector, `servicio` no se toca: mandarlo vacío
+        // borraba el interés ya cargado.
+        ...(servicioSync ? { servicio: servicioTexto || PLACEHOLDER_SERVICIO } : {}),
         valor_estimado: valorEstimadoNum,
         proxima_accion: form.proxima_accion.trim() || undefined,
         fecha_proxima_accion: form.fecha_proxima_accion || undefined,
         responsable: form.responsable.trim().toUpperCase() || undefined,
         observaciones: form.observaciones.trim() ? form.observaciones.trim() : null,
       });
-      if (actualizado) {
-        await cargar();
-        onUpdated?.();
-      }
+      await cargar();
+      onUpdated?.();
+    } catch (err) {
+      console.error("[crm] guardar prospecto:", err);
+      setErrorForm(mensajeDeError(err, "No se pudieron guardar los cambios."));
     } finally {
       setSaving(false);
     }
   }
 
   async function handleCambiarEtapa(etapaCodigo: string) {
-    await moveProspecto(id, etapaCodigo);
-    await cargar();
-    onUpdated?.();
+    setErrorForm(null);
+    try {
+      await moveProspecto(id, etapaCodigo);
+      await cargar();
+      onUpdated?.();
+    } catch (err) {
+      console.error("[crm] cambiar etapa:", err);
+      setErrorForm(mensajeDeError(err, "No se pudo cambiar la etapa."));
+    }
   }
 
   async function handleAgregarNota(e: React.FormEvent) {
     e.preventDefault();
     if (!nuevaNota.trim()) return;
+    setErrorForm(null);
     setGuardandoNota(true);
-    await addNota(id, nuevaNota);
-    setNuevaNota("");
-    await cargar();
-    setGuardandoNota(false);
-    setTimeout(() => notaInputRef.current?.focus(), 0);
-    onUpdated?.();
+    try {
+      await addNota(id, nuevaNota);
+      // El texto se limpia solo si la nota realmente se guardó; antes se perdía
+      // lo escrito aunque el servidor la hubiera rechazado.
+      setNuevaNota("");
+      await cargar();
+      onUpdated?.();
+    } catch (err) {
+      console.error("[crm] agregar nota:", err);
+      setErrorForm(mensajeDeError(err, "No se pudo agregar la nota."));
+    } finally {
+      setGuardandoNota(false);
+      setTimeout(() => notaInputRef.current?.focus(), 0);
+    }
   }
 
   async function handleEliminar() {
-    await deleteProspecto(id);
-    onDeleted?.();
+    setErrorForm(null);
+    try {
+      await deleteProspecto(id);
+      onDeleted?.();
+    } catch (err) {
+      console.error("[crm] eliminar prospecto:", err);
+      setConfirmarEliminar(false);
+      setErrorForm(mensajeDeError(err, "No se pudo eliminar el prospecto."));
+    }
   }
 
   // ── Estados de carga / not found ─────────────────────────────────────────
@@ -345,7 +399,10 @@ export default function ProspectoDetalleForm({
     );
   }
 
-  const etapaActual = etapas.find((e) => e.codigo === prospecto.etapa);
+  // Comparación normalizada como en el Kanban: con casing distinto la etapa
+  // activa no se marcaba y el botón "Crear cliente" no aparecía.
+  const etapaCodigoActual = normalizeEtapaCodigo(prospecto.etapa);
+  const etapaActual = etapas.find((e) => normalizeEtapaCodigo(e.codigo) === etapaCodigoActual);
   const etapaActualClasses = etapaActual ? getEtapaClasses(etapaActual.color) : null;
 
   return (
@@ -402,6 +459,26 @@ export default function ProspectoDetalleForm({
             : "space-y-6"
         }
       >
+        {/* Error de cualquier acción (guardar, etapa, nota, eliminar). Sticky
+            para que no quede fuera de vista al scrollear el detalle. */}
+        {errorForm ? (
+          <div
+            role="alert"
+            className="sticky top-0 z-20 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 shadow-sm"
+          >
+            <span aria-hidden="true">⚠</span>
+            <span className="flex-1 font-medium">{errorForm}</span>
+            <button
+              type="button"
+              onClick={() => setErrorForm(null)}
+              className="shrink-0 text-rose-400 hover:text-rose-700"
+              aria-label="Cerrar aviso"
+            >
+              ✕
+            </button>
+          </div>
+        ) : null}
+
         {/* Confirmación eliminar (común a ambas variants) */}
         {confirmarEliminar ? (
           <div className="flex items-center justify-between gap-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
@@ -433,7 +510,7 @@ export default function ProspectoDetalleForm({
           <div className="flex flex-wrap gap-2">
             {etapas.map((e) => {
               const cls = getEtapaClasses(e.color);
-              const active = prospecto.etapa === e.codigo;
+              const active = normalizeEtapaCodigo(e.codigo) === etapaCodigoActual;
               return (
                 <button
                   key={e.id}
@@ -450,7 +527,7 @@ export default function ProspectoDetalleForm({
               );
             })}
           </div>
-          {prospecto.etapa === "GANADO" ? (
+          {etapaCodigoActual === "GANADO" ? (
             <div className="mt-3 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5">
               <p className="text-sm font-medium text-emerald-700">✓ Oportunidad ganada</p>
               <a
@@ -520,9 +597,12 @@ export default function ProspectoDetalleForm({
                 <input
                   type="text"
                   name="telefono"
-                  value={form.telefono}
+                  value={formatTelefonoDisplay(form.telefono)}
                   onChange={handleChange}
+                  placeholder="0981 100 453"
                   className={INPUT_CLS}
+                  inputMode="tel"
+                  maxLength={20}
                 />
               </div>
             </div>
@@ -659,13 +739,6 @@ export default function ProspectoDetalleForm({
                 <p className="mt-1 text-xs text-slate-500">Registro inmutable del creador del lead</p>
               </div>
             </div>
-
-            {errorForm ? (
-              <div className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                <span>⚠</span>
-                <span className="font-medium">{errorForm}</span>
-              </div>
-            ) : null}
 
             <div className="flex flex-wrap gap-2 pt-1">
               <button

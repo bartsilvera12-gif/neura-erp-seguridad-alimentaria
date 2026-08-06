@@ -35,3 +35,24 @@ export function isValidTelefono(value: string): boolean {
   const cleaned = cleanTelefono(value);
   return cleaned.length === 10 && cleaned.startsWith("09");
 }
+
+/**
+ * Normaliza lo que el usuario tipea o pega a formato local antes de guardarlo.
+ * Acepta el internacional (+595 981 100 453) y lo pasa a 0981100453; con
+ * `cleanTelefono` a secas el "595" se comía los dígitos útiles al truncar a 10.
+ */
+export function normalizeTelefonoInput(value: string): string {
+  let d = value.replace(/\D/g, "");
+  if (d.startsWith("595")) d = `0${d.slice(3)}`;
+  return d.slice(0, 10);
+}
+
+/**
+ * Validación permisiva para captura de leads: alcanza con que sea un número
+ * plausible. Un celular mal tipeado no debe impedir registrar la oportunidad,
+ * y los fijos (021…) tienen menos de 10 dígitos.
+ */
+export function isTelefonoPlausible(value: string): boolean {
+  const d = value.replace(/\D/g, "");
+  return d.length >= 6 && d.length <= 13;
+}

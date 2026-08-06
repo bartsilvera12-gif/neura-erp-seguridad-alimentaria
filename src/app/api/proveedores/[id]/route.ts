@@ -7,6 +7,8 @@ import type { Proveedor, ProveedorCategoria } from "@/lib/proveedores/types";
 import {
   getProveedorById,
   updateProveedor,
+  deleteProveedor,
+  contarReferenciasProveedor,
   listRelacionesDeProveedor,
   replaceRelacionesProveedor,
   findProveedorByRuc,
@@ -168,5 +170,57 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: s
   } catch (err) {
     console.error("[/api/proveedores/[id] PATCH] outer", err instanceof Error ? err.message : err);
     return NextResponse.json(errorResponse("No se pudo actualizar el proveedor."), { status: 500 });
+  }
+}
+
+/**
+ * DELETE /api/proveedores/[id]
+ *
+ * Mismo criterio que el borrado de productos: si el proveedor nunca se usó se
+ * elimina de verdad; si ya tiene compras u órdenes de compra se archiva
+ * (`estado = inactivo`) para no romper el historial. Devuelve `modo` para que la
+ * UI pueda decir cuál de las dos cosas pasó.
+ */
+export async function DELETE(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const tenant = await getTenantSupabaseFromAuth(request);
+    if (!tenant) return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
+    const schema = await fetchDataSchemaForEmpresaId(tenant.auth.empresa_id);
+    const empresaId = tenant.auth.empresa_id;
+    const { id } = await ctx.params;
+
+    const existing = await getProveedorById(schema, empresaId, id);
+    if (!existing) return NextResponse.json(errorResponse("Proveedor no encontrado."), { status: 404 });
+    const nombre = existing.nombre ?? "";
+
+    const usos = await contarReferenciasProveedor(schema, empresaId, id);
+    if (usos.length > 0) {
+      await updateProveedor(schema, empresaId, id, { estado: "inactivo" });
+      return NextResponse.json(successResponse({ modo: "desactivado", nombre, usos }));
+    }
+
+    try {
+      const borrado = await deleteProveedor(schema, empresaId, id);
+      if (!borrado) {
+        return NextResponse.json(errorResponse("Proveedor no encontrado."), { status: 404 });
+      }
+    } catch (e) {
+      // Red de seguridad: si apareció una referencia entre el chequeo y el
+      // borrado, la FK lo impide. Se degrada a archivar en vez de fallar.
+      const msg = e instanceof Error ? e.message : "";
+      const code = (e as { code?: string })?.code;
+      if (code === "23503" || /foreign key|violates/i.test(msg)) {
+        await updateProveedor(schema, empresaId, id, { estado: "inactivo" });
+        return NextResponse.json(
+          successResponse({ modo: "desactivado", nombre, usos: ["registros asociados"] })
+        );
+      }
+      throw e;
+    }
+
+    return NextResponse.json(successResponse({ modo: "eliminado", nombre, usos: [] }));
+  } catch (err) {
+    console.error("[/api/proveedores/[id] DELETE]", err instanceof Error ? err.message : err);
+    return NextResponse.json(errorResponse("No se pudo eliminar el proveedor."), { status: 500 });
   }
 }

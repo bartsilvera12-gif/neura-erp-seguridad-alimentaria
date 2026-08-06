@@ -250,6 +250,45 @@ export async function updateProveedor(
   return rows[0] ?? null;
 }
 
+/**
+ * Historial que impide borrar un proveedor de verdad. Solo se listan las tablas
+ * que dejarían huérfano un documento: `proveedor_categoria_rel` y
+ * `proveedor_productos` van por CASCADE y `productos.proveedor_principal_id`
+ * por SET NULL, así que no bloquean.
+ *
+ * Una tabla ausente en el tenant no bloquea el borrado.
+ */
+export async function contarReferenciasProveedor(
+  schemaRaw: string,
+  empresaId: string,
+  id: string
+): Promise<string[]> {
+  const schema = assertAllowedChatDataSchema(schemaRaw);
+  const refs: { tabla: string; etiqueta: string }[] = [
+    { tabla: "compras", etiqueta: "compras registradas" },
+    { tabla: "ordenes_compra", etiqueta: "órdenes de compra" },
+  ];
+
+  const usos: string[] = [];
+  for (const r of refs) {
+    const t = quoteSchemaTable(schema, r.tabla);
+    try {
+      const { rows } = await pool().query<{ n: string }>(
+        `SELECT COUNT(*)::text AS n FROM ${t}
+          WHERE proveedor_id = $1::uuid AND empresa_id = $2::uuid`,
+        [id, empresaId]
+      );
+      const n = Number(rows[0]?.n ?? 0);
+      if (n > 0) usos.push(`${n} ${r.etiqueta}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (/does not exist/i.test(msg)) continue;
+      throw err;
+    }
+  }
+  return usos;
+}
+
 export async function deleteProveedor(
   schemaRaw: string,
   empresaId: string,

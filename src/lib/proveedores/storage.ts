@@ -93,6 +93,39 @@ export async function updateProveedor(
   }
 }
 
+export type EliminarProveedorResult =
+  | { ok: true; modo: "eliminado" | "desactivado"; nombre: string; usos: string[] }
+  | { ok: false; error: string };
+
+/**
+ * Elimina o archiva el proveedor según su historial; el servidor decide y lo
+ * informa en `modo`.
+ */
+export async function eliminarProveedor(id: string): Promise<EliminarProveedorResult> {
+  try {
+    const res = await fetchWithSupabaseSession(`/api/proveedores/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      success?: boolean;
+      data?: { modo?: "eliminado" | "desactivado"; nombre?: string; usos?: string[] };
+      error?: string;
+    };
+    if (!res.ok || !json.success) {
+      return { ok: false, error: json.error ?? `Error ${res.status}` };
+    }
+    return {
+      ok: true,
+      modo: json.data?.modo === "desactivado" ? "desactivado" : "eliminado",
+      nombre: json.data?.nombre ?? "",
+      usos: json.data?.usos ?? [],
+    };
+  } catch (e) {
+    console.error("[proveedores] eliminarProveedor:", e);
+    return { ok: false, error: e instanceof Error ? e.message : "No se pudo conectar con el servidor." };
+  }
+}
+
 export async function getCategoriasProveedor(options?: { todas?: boolean }): Promise<ProveedorCategoria[]> {
   const q = options?.todas ? "?todas=1" : "";
   try {

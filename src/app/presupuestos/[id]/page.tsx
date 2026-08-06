@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { FileText, ArrowLeft, Loader2, Download, FileCheck2, Receipt } from "lucide-react";
+import { FileText, ArrowLeft, Loader2, Download, FileCheck2, Receipt, Pencil } from "lucide-react";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { ESTADO_LABEL, type EstadoPresupuesto } from "@/lib/presupuestos/types";
 
@@ -27,6 +27,7 @@ type Presu = {
   plazo_entrega: string | null;
   observaciones: string | null;
   convertido_pedido_id: string | null;
+  convertido_venta_id: string | null;
 };
 type ItemRow = {
   id: string;
@@ -194,6 +195,9 @@ export default function PresupuestoDetallePage() {
     );
   }
 
+  const puedeEditar =
+    presu.estado !== "convertido" && !presu.convertido_pedido_id && !presu.convertido_venta_id;
+
   return (
     <div className="space-y-6 max-w-5xl">
       <Link href="/presupuestos" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
@@ -211,6 +215,16 @@ export default function PresupuestoDetallePage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          {/* Un presupuesto convertido ya se reflejó en un pedido o una venta:
+              su contenido queda congelado. */}
+          {puedeEditar && (
+            <Link
+              href={`/presupuestos/${id}/editar`}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              <Pencil className="h-4 w-4" /> Editar
+            </Link>
+          )}
           <button onClick={abrirPdf} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
             <Download className="h-4 w-4" /> Descargar PDF
           </button>

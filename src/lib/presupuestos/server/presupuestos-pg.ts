@@ -172,6 +172,179 @@ export async function crearPresupuesto(
   return { id: presupuestoId, numero_control: numero };
 }
 
+/** Normaliza el `iva_tipo` que llega del cliente. */
+function asIvaTipo(v: unknown): IvaTipoPresupuesto {
+  return v === "EXENTA" || v === "5%" || v === "10%" ? v : "10%";
+}
+
+/**
+ * Valida y normaliza los ítems que llegan del cliente. Devuelve `null` si el
+ * payload no sirve (lista vacía o alguna línea inválida). Compartido por el alta
+ * y la edición para que ambas exijan exactamente lo mismo.
+ */
+export function parseItemsPresupuesto(raw: unknown): PresupuestoItemInput[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const out: PresupuestoItemInput[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== "object") return null;
+    const r = x as Record<string, unknown>;
+    const nombre = String(r.producto_nombre ?? "").trim();
+    const cantidad = Number(r.cantidad);
+    const precio = Number(r.precio_unitario);
+    if (!nombre || !(cantidad > 0) || !(precio >= 0)) return null;
+    out.push({
+      producto_id: r.producto_id ? String(r.producto_id) : null,
+      producto_nombre: nombre,
+      sku: r.sku ? String(r.sku) : null,
+      cantidad,
+      unidad_medida: r.unidad_medida ? String(r.unidad_medida) : null,
+      precio_unitario: precio,
+      iva_tipo: asIvaTipo(r.iva_tipo),
+      descuento: Math.max(0, Number(r.descuento) || 0),
+    });
+  }
+  return out;
+}
+
+/** La edición recibe exactamente los mismos campos que el alta. */
+export type ActualizarPresupuestoInput = CrearPresupuestoInput;
+
+/**
+ * Edita un presupuesto existente: cabecera + reemplazo completo de ítems.
+ * Recalcula todos los totales en el server (no confía en los del cliente) y NO
+ * toca stock, igual que el alta.
+ *
+ * Un presupuesto ya convertido (pedido o venta) es inmutable: su contenido
+ * quedó reflejado en documentos aguas abajo y editarlo los dejaría mintiendo.
+ *
+ * `numero_control`, `estado` y `fecha` no se tocan: el documento sigue siendo el
+ * mismo, solo cambia su contenido.
+ */
+export async function actualizarPresupuesto(
+  sb: AppSupabaseClient,
+  empresaId: string,
+  presupuestoId: string,
+  input: ActualizarPresupuestoInput
+): Promise<{ id: string; numero_control: string }> {
+  if (!input.items || input.items.length === 0) {
+    throw new Error("El presupuesto debe tener al menos un ítem.");
+  }
+  if (!input.cliente_nombre || !input.cliente_nombre.trim()) {
+    throw new Error("El nombre del cliente es obligatorio.");
+  }
+
+  const pq = await sb
+    .from("presupuestos")
+    .select("id, numero_control, estado, fecha, convertido_pedido_id, convertido_venta_id")
+    .eq("empresa_id", empresaId)
+    .eq("id", presupuestoId)
+    .maybeSingle();
+  if (pq.error) throw new Error(pq.error.message);
+  if (!pq.data) throw new Error("Presupuesto no encontrado.");
+  const actual = pq.data as {
+    numero_control: string;
+    estado: string;
+    fecha: string | null;
+    convertido_pedido_id: string | null;
+    convertido_venta_id: string | null;
+  };
+
+  if (actual.estado === "convertido" || actual.convertido_pedido_id || actual.convertido_venta_id) {
+    throw new Error("Este presupuesto ya fue convertido; no se puede editar.");
+  }
+
+  const calculados = input.items.map((it) => ({ raw: it, calc: calcularItem(it) }));
+  let subtotal = 0;
+  let montoIva = 0;
+  let descuentoTotal = 0;
+  let total = 0;
+  for (const { calc } of calculados) {
+    subtotal += calc.subtotal;
+    montoIva += calc.monto_iva;
+    descuentoTotal += calc.descuento;
+    total += calc.total;
+  }
+
+  // El vencimiento se recalcula desde la fecha de emisión original, no desde hoy:
+  // editar el presupuesto no lo vuelve más nuevo.
+  let vencimiento: string | null = null;
+  if (input.validez_dias && input.validez_dias > 0) {
+    const base = actual.fecha ? new Date(actual.fecha) : new Date();
+    const d = Number.isNaN(base.getTime()) ? new Date() : base;
+    d.setDate(d.getDate() + input.validez_dias);
+    vencimiento = d.toISOString().slice(0, 10);
+  }
+
+  // Se guardan los ítems actuales para poder restaurarlos si la reinserción falla.
+  const prevQ = await sb
+    .from("presupuesto_items")
+    .select("*")
+    .eq("empresa_id", empresaId)
+    .eq("presupuesto_id", presupuestoId);
+  if (prevQ.error) throw new Error(prevQ.error.message);
+  const previos = (prevQ.data ?? []) as Record<string, unknown>[];
+
+  const del = await sb
+    .from("presupuesto_items")
+    .delete()
+    .eq("empresa_id", empresaId)
+    .eq("presupuesto_id", presupuestoId);
+  if (del.error) throw new Error(del.error.message);
+
+  const itemsRows = calculados.map(({ raw, calc }) => ({
+    empresa_id: empresaId,
+    presupuesto_id: presupuestoId,
+    producto_id: raw.producto_id,
+    producto_nombre: raw.producto_nombre,
+    sku: raw.sku,
+    cantidad: calc.cantidad,
+    unidad_medida: raw.unidad_medida,
+    precio_unitario: calc.precio_unitario,
+    iva_tipo: raw.iva_tipo,
+    subtotal: calc.subtotal,
+    monto_iva: calc.monto_iva,
+    descuento: calc.descuento,
+    total: calc.total,
+  }));
+  const insItems = await sb.from("presupuesto_items").insert(itemsRows);
+  if (insItems.error) {
+    // Rollback best-effort: sin esto el presupuesto quedaría sin ítems.
+    if (previos.length > 0) {
+      try {
+        await sb.from("presupuesto_items").insert(previos);
+      } catch {}
+    }
+    throw new Error(insItems.error.message);
+  }
+
+  const upd = await sb
+    .from("presupuestos")
+    .update({
+      cliente_id: input.cliente_id,
+      cliente_nombre: input.cliente_nombre.trim(),
+      cliente_ruc: input.cliente_ruc?.trim() || null,
+      cliente_telefono: input.cliente_telefono?.trim() || null,
+      cliente_direccion: input.cliente_direccion?.trim() || null,
+      moneda: input.moneda || "PYG",
+      subtotal: round2(subtotal),
+      monto_iva: round2(montoIva),
+      descuento_total: round2(descuentoTotal),
+      total: round2(total),
+      validez_dias: input.validez_dias ?? null,
+      fecha_vencimiento: vencimiento,
+      forma_pago: input.forma_pago?.trim() || null,
+      plazo_entrega: input.plazo_entrega?.trim() || null,
+      fecha_entrega: input.fecha_entrega?.trim() || null,
+      observaciones: input.observaciones?.trim() || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("empresa_id", empresaId)
+    .eq("id", presupuestoId);
+  if (upd.error) throw new Error(upd.error.message);
+
+  return { id: presupuestoId, numero_control: actual.numero_control };
+}
+
 /**
  * Convierte un presupuesto APROBADO en un pedido (proyecto tipo 'pedido', estado inicial 'nuevo').
  * NO descuenta stock (el pedido aún no está confirmado). Evita doble conversión.

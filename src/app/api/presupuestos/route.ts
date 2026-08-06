@@ -2,41 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantSupabaseFromAuth } from "@/lib/supabase/tenant-api";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
-import { crearPresupuesto, type PresupuestoItemInput } from "@/lib/presupuestos/server/presupuestos-pg";
+import { crearPresupuesto, parseItemsPresupuesto } from "@/lib/presupuestos/server/presupuestos-pg";
 
 const PRESU_COLS =
   "id, cliente_id, cliente_nombre, cliente_ruc, cliente_telefono, cliente_direccion, " +
   "numero_control, estado, moneda, subtotal, monto_iva, descuento_total, total, validez_dias, " +
   "fecha, fecha_vencimiento, forma_pago, plazo_entrega, fecha_entrega, observaciones, " +
   "convertido_pedido_id, convertido_venta_id, created_at, updated_at";
-
-function asIva(v: unknown): "EXENTA" | "5%" | "10%" {
-  return v === "EXENTA" || v === "5%" || v === "10%" ? v : "10%";
-}
-
-function parseItems(raw: unknown): PresupuestoItemInput[] | null {
-  if (!Array.isArray(raw) || raw.length === 0) return null;
-  const out: PresupuestoItemInput[] = [];
-  for (const x of raw) {
-    if (!x || typeof x !== "object") return null;
-    const r = x as Record<string, unknown>;
-    const nombre = String(r.producto_nombre ?? "").trim();
-    const cantidad = Number(r.cantidad);
-    const precio = Number(r.precio_unitario);
-    if (!nombre || !(cantidad > 0) || !(precio >= 0)) return null;
-    out.push({
-      producto_id: r.producto_id ? String(r.producto_id) : null,
-      producto_nombre: nombre,
-      sku: r.sku ? String(r.sku) : null,
-      cantidad,
-      unidad_medida: r.unidad_medida ? String(r.unidad_medida) : null,
-      precio_unitario: precio,
-      iva_tipo: asIva(r.iva_tipo),
-      descuento: Math.max(0, Number(r.descuento) || 0),
-    });
-  }
-  return out;
-}
 
 /** GET /api/presupuestos — listado (opcional ?estado=). */
 export async function GET(request: NextRequest) {
@@ -73,7 +45,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(errorResponse("JSON inválido."), { status: 400 });
     }
 
-    const items = parseItems(body.items);
+    const items = parseItemsPresupuesto(body.items);
     if (!items) {
       return NextResponse.json(errorResponse("El presupuesto debe tener al menos un ítem válido."), { status: 400 });
     }

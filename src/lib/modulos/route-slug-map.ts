@@ -140,7 +140,10 @@ export function pathRequiresModuleSlug(pathname: string): string | null {
   if (p.startsWith("/ventas")) return "ventas";
   if (p.startsWith("/inventario")) return "inventario";
   if (p.startsWith("/clientes")) return "clientes";
-  if (p.startsWith("/proveedores")) return "compras";
+  // Proveedores vive en el menú bajo Inventario, así que se gatea con ese
+  // módulo. Con el slug `compras` el link aparecía para quien tenía inventario
+  // y el AuthGuard lo frenaba al entrar.
+  if (p.startsWith("/proveedores")) return "inventario";
   if (p.startsWith("/compras/ordenes") || p.startsWith("/compras/desde-orden")) return "ordenes_compra";
   if (p.startsWith("/compras")) return "compras";
   if (p.startsWith("/gastos")) return "gastos";

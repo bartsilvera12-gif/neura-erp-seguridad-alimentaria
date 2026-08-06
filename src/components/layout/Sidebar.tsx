@@ -132,6 +132,10 @@ const MENU_STRUCTURE: MenuItem[] = [
     { label: "Productos", href: "/inventario" },
     { label: "Movimientos", href: "/inventario/movimientos" },
     { label: "Categorías", href: "/inventario/categorias" },
+    // Proveedores es maestro de abastecimiento: se busca desde inventario, no
+    // desde el circuito de compra. Estaba colgado de "Órdenes de compra" y ahi
+    // nadie lo encontraba.
+    { label: "Proveedores", href: "/proveedores" },
     // "Depósitos / Ubicaciones" oculto en instancia En lo de Mari (no aplica para gastronomía).
   ]},
   { key: "clientes", slug: "clientes", label: "Clientes", href: "/clientes", icon: Users },
@@ -151,7 +155,6 @@ const MENU_STRUCTURE: MenuItem[] = [
       // Las compras ya facturadas (las que impactaron stock). `exactMatch` para
       // que no se marque activa estando en /compras/ordenes.
       { label: "Compras registradas", href: "/compras", exactMatch: true },
-      { label: "Proveedores", href: "/proveedores" },
     ],
   },
   { key: "gastos", slug: "gastos", label: "Gastos", href: "/gastos", icon: Receipt },

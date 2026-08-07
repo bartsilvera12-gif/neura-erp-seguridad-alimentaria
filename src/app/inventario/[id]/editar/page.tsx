@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import MontoInput from "@/components/ui/MontoInput";
-import { getProducto, productoExiste, updateProducto } from "@/lib/inventario/storage";
+import { getProducto, productoConMismoNombre, updateProducto } from "@/lib/inventario/storage";
 import type { MetodoValuacion, TipoIvaProducto } from "@/lib/inventario/types";
 import ProductImageUploader from "@/components/inventario/ProductImageUploader";
 import ProductoDocumentos from "@/components/inventario/ProductoDocumentos";
@@ -310,16 +310,17 @@ export default function EditarProductoPage() {
       const codigoIngresado = form.codigo_barras.trim();
 
       // Pre-chequeo de duplicado: tolerante a fallos de red — si la consulta falla,
-      // seguimos. El backend igual valida unicidad en el PATCH.
+      // seguimos. El backend igual valida unicidad en el PATCH. Solo por nombre:
+      // el SKU se repite entre lotes del mismo artículo.
       try {
-        const duplicado = await productoExiste(form.sku, form.nombre);
+        const duplicado = await productoConMismoNombre(form.nombre);
         if (duplicado && duplicado.id !== id) {
           setErrorDuplicado(`Ya existe "${duplicado.nombre}" con SKU ${duplicado.sku}.`);
           try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch {}
           return;
         }
       } catch (err) {
-        console.warn("[inventario/editar] productoExiste failed, ignorando:", err);
+        console.warn("[inventario/editar] productoConMismoNombre failed, ignorando:", err);
       }
 
       const cambioCodigo = codigoIngresado !== (codigoOriginal ?? "");

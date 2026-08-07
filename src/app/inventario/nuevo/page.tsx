@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import MontoInput from "@/components/ui/MontoInput";
 import SelectFromList from "@/components/inventario/SelectFromList";
 import { MargenPorCanal } from "@/components/inventario/MargenPorCanal";
-import { productoExiste, saveProducto } from "@/lib/inventario/storage";
+import { productoConMismoNombre, saveProducto } from "@/lib/inventario/storage";
 import type { MetodoValuacion, TipoIvaProducto } from "@/lib/inventario/types";
 import { ShoppingBag, Boxes, ClipboardList, type LucideIcon } from "lucide-react";
 
@@ -291,16 +291,17 @@ export default function NuevoProductoPage() {
       // Código de barras: se guarda tal cual (escaneable). Vacío → null (sin barcode).
       const codigoEnInput = form.codigo_barras.trim();
 
-      // Pre-chequeo duplicado tolerante a fallos de red.
+      // Pre-chequeo duplicado tolerante a fallos de red. Solo por nombre: el SKU
+      // se repite entre lotes del mismo artículo y no bloquea el alta.
       try {
-        const duplicado = await productoExiste(form.sku, form.nombre);
+        const duplicado = await productoConMismoNombre(form.nombre);
         if (duplicado) {
           setErrorDuplicado(`Ya existe "${duplicado.nombre}" con SKU ${duplicado.sku}.`);
           try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch {}
           return;
         }
       } catch (err) {
-        console.warn("[inventario/nuevo] productoExiste failed, ignorando:", err);
+        console.warn("[inventario/nuevo] productoConMismoNombre failed, ignorando:", err);
       }
       const codigo: string | null = codigoEnInput || null;
       const interno = false; // ya no se autogeneran códigos internos; el barcode es real
@@ -510,7 +511,7 @@ export default function NuevoProductoPage() {
                     <option key={p.prefix} value={p.siguiente}>{p.prefix} → {p.siguiente}</option>
                   ))}
                 </select>
-                <span className="text-[11px] text-gray-400">Código interno editable. Podés ajustar el número final.</span>
+                <span className="text-[11px] text-gray-400">Código interno editable. Podés repetirlo entre lotes del mismo artículo.</span>
               </div>
             </div>
 

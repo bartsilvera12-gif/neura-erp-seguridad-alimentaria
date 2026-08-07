@@ -7,7 +7,7 @@ import MontoInput from "@/components/ui/MontoInput";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 import { saveCompraMulti, uploadComprobante, type CompraItemPayload } from "@/lib/compras/storage";
 import { getProveedores, proveedorExiste, createProveedor } from "@/lib/proveedores/storage";
-import { getProductos, productoExiste, saveProducto } from "@/lib/inventario/storage";
+import { getProductos, productoConMismoNombre, saveProducto } from "@/lib/inventario/storage";
 import type { TipoIva, TipoPago, Moneda } from "@/lib/compras/types";
 import type { Proveedor } from "@/lib/proveedores/types";
 import type { MetodoValuacion, Producto } from "@/lib/inventario/types";
@@ -345,8 +345,9 @@ export default function NuevaCompraPage() {
   async function handleAgregarProducto() {
     if (!formProducto.nombre.trim() || !formProducto.sku.trim()) return;
     setErrorSku(null);
-    const dup = await productoExiste(formProducto.sku, formProducto.nombre);
-    if (dup) { setErrorSku(`Ya existe un producto con ese SKU o nombre ("${dup.nombre}" — ${dup.sku}).`); return; }
+    // Solo por nombre: el SKU se repite entre lotes del mismo artículo.
+    const dup = await productoConMismoNombre(formProducto.nombre);
+    if (dup) { setErrorSku(`Ya existe un producto con ese nombre ("${dup.nombre}" — ${dup.sku}).`); return; }
     // Mapear el tipo elegido a los flags del producto (igual que en Inventario → Nuevo).
     const flags =
       formProducto.tipo === "materia"

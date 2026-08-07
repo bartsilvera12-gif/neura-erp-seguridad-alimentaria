@@ -168,23 +168,22 @@ export async function getProducto(id: string): Promise<Producto | null> {
 }
 
 /**
- * Comprueba si ya existe un producto con el mismo SKU o nombre (case-insensitive).
+ * Comprueba si ya existe un producto con el mismo nombre (case-insensitive).
  * Devuelve el producto encontrado o null.
+ *
+ * El SKU quedó fuera del chequeo a propósito: se carga un producto por lote y
+ * todos los lotes de un mismo artículo comparten SKU, así que repetirlo es
+ * normal y no debe frenar el alta (ver migración
+ * `20260807120000_productos_sku_no_unico.sql`). Lo que sí distingue una ficha
+ * de otra es el nombre, que lleva el lote.
  */
-export async function productoExiste(
-  sku: string,
+export async function productoConMismoNombre(
   nombre: string
 ): Promise<Producto | null> {
   const productos = await getProductos();
-  const skuNorm = sku.toLowerCase().trim();
   const nombreNorm = nombre.toLowerCase().trim();
-  return (
-    productos.find(
-      (p) =>
-        p.sku.toLowerCase() === skuNorm ||
-        p.nombre.toLowerCase() === nombreNorm
-    ) ?? null
-  );
+  if (!nombreNorm) return null;
+  return productos.find((p) => p.nombre.toLowerCase() === nombreNorm) ?? null;
 }
 
 /**

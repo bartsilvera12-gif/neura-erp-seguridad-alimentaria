@@ -72,6 +72,11 @@ export function parseProductosRows(rows: Record<string, string>[]): ProductoPars
 
 export interface ResolverMaps {
   productosBySku: Map<string, ProductoExistente>;
+  /**
+   * SKUs que hoy tienen más de un producto (un producto por lote comparte el SKU
+   * del artículo). Para esos, el SKU no alcanza para saber qué fila actualizar.
+   */
+  skusAmbiguos: Set<string>;
   productosByCodigo: Map<string, ProductoExistente>;
   categoriasByName: Map<string, string>;
   proveedoresByName: Map<string, string>;
@@ -96,10 +101,15 @@ export async function buildResolverMaps(schemaRaw: string, empresaId: string): P
   ]);
 
   const productosBySku = new Map<string, ProductoExistente>();
+  const skusAmbiguos = new Set<string>();
   const productosByCodigo = new Map<string, ProductoExistente>();
   for (const p of prods.rows) {
     const normalized: ProductoExistente = { id: p.id, sku: p.sku, codigo_barras: p.codigo_barras, stock_actual: Number(p.stock_actual) };
-    if (p.sku) productosBySku.set(p.sku.toUpperCase(), normalized);
+    if (p.sku) {
+      const key = p.sku.toUpperCase();
+      if (productosBySku.has(key)) skusAmbiguos.add(key);
+      productosBySku.set(key, normalized);
+    }
     if (p.codigo_barras) productosByCodigo.set(p.codigo_barras.toUpperCase(), normalized);
   }
   const categoriasByName = new Map<string, string>();
@@ -112,7 +122,7 @@ export async function buildResolverMaps(schemaRaw: string, empresaId: string): P
     ubicacionesByName.set(u.nombre.trim().toUpperCase(), u.id);
     if (u.codigo) ubicacionesByCodigo.set(u.codigo.trim().toUpperCase(), u.id);
   }
-  return { productosBySku, productosByCodigo, categoriasByName, proveedoresByName, ubicacionesByName, ubicacionesByCodigo };
+  return { productosBySku, skusAmbiguos, productosByCodigo, categoriasByName, proveedoresByName, ubicacionesByName, ubicacionesByCodigo };
 }
 
 export function buildPreview(parsed: ProductoParsed[], maps: ResolverMaps): PreviewResponse {
@@ -127,7 +137,11 @@ export function buildPreview(parsed: ProductoParsed[], maps: ResolverMaps): Prev
 
   const rows: PreviewRow[] = parsed.map((p) => {
     // Errores fila
-    if (p.sku && skuVistos.has(p.sku)) p.errors.push(`SKU "${p.sku}" duplicado en el archivo.`);
+    // El SKU repetido es válido (un producto por lote), pero dos filas con el
+    // mismo SKU y sin código de barras apuntarían al mismo producto existente.
+    if (p.sku && skuVistos.has(p.sku) && !p.codigo_barras) {
+      p.errors.push(`SKU "${p.sku}" repetido en el archivo sin CODIGO_BARRAS que distinga las filas.`);
+    }
     if (p.sku) skuVistos.add(p.sku);
     if (p.codigo_barras && codbarVistos.has(p.codigo_barras)) p.errors.push(`Código de barras "${p.codigo_barras}" duplicado en el archivo.`);
     if (p.codigo_barras) codbarVistos.add(p.codigo_barras);
@@ -138,6 +152,10 @@ export function buildPreview(parsed: ProductoParsed[], maps: ResolverMaps): Prev
     if (p.codigo_barras && maps.productosByCodigo.has(p.codigo_barras)) {
       const ex = maps.productosByCodigo.get(p.codigo_barras)!;
       matchId = ex.id; stockAnterior = ex.stock_actual;
+    } else if (p.sku && maps.skusAmbiguos.has(p.sku)) {
+      // Varios productos comparten ese SKU: actualizar "uno cualquiera" sería
+      // pisar el lote equivocado. Que la fila traiga CODIGO_BARRAS.
+      p.errors.push(`El SKU "${p.sku}" corresponde a más de un producto. Indicá CODIGO_BARRAS para elegir cuál actualizar.`);
     } else if (p.sku && maps.productosBySku.has(p.sku)) {
       const ex = maps.productosBySku.get(p.sku)!;
       matchId = ex.id; stockAnterior = ex.stock_actual;

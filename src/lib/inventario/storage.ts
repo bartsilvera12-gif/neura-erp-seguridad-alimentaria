@@ -1,6 +1,6 @@
 import { getCurrentUser } from "@/lib/auth";
 import { getBrowserSupabaseForEmpresaData } from "@/lib/supabase/browser-data-client";
-import type { PesoUnidad } from "./peso";
+import { esPesoUnidad, type PesoUnidad } from "./peso";
 import type {
   Producto,
   MovimientoInventario,
@@ -45,6 +45,13 @@ interface ProductoRow {
   descripcion?: string | null;
   modo_receta?: string | null;
   tipo_iva?: string | null;
+  /**
+   * La API devuelve estos dos campos desde siempre. Faltaban acá, así que el
+   * mapeo los perdía: la pantalla de edición mostraba el peso vacío y al
+   * guardar lo borraba de la base.
+   */
+  peso_gramos?: number | string | null;
+  peso_unidad?: string | null;
 }
 
 interface MovimientoRow {
@@ -99,6 +106,8 @@ function rowToProducto(row: ProductoRow): Producto {
     descripcion: row.descripcion ?? null,
     modo_receta: row.modo_receta ?? "preparado_al_vender",
     tipo_iva: (row.tipo_iva === "EXENTA" || row.tipo_iva === "5%" ? row.tipo_iva : "10%") as "EXENTA" | "5%" | "10%",
+    peso_gramos: row.peso_gramos != null ? Number(row.peso_gramos) : null,
+    peso_unidad: esPesoUnidad(row.peso_unidad) ? row.peso_unidad : "kg",
   };
 }
 
@@ -240,6 +249,9 @@ export async function saveProducto(
         : 0,
     descripcion: datos.descripcion ?? null,
     tipo_iva: datos.tipo_iva ?? "10%",
+    // El alta tampoco mandaba `modo_receta`: la API lo acepta y quedaba en el
+    // default aunque quien crea el producto hubiera elegido otro modo.
+    modo_receta: datos.modo_receta ?? "preparado_al_vender",
     peso: datos.peso ?? null,
     peso_unidad: datos.peso_unidad ?? "kg",
   };

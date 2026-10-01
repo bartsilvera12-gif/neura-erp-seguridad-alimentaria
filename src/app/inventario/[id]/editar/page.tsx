@@ -41,6 +41,7 @@ export default function EditarProductoPage() {
     costo_promedio: "",
     markup: "",
     precio_venta: "",
+    precio_venta_usd: "",
     precio_mayorista: "",
     cantidad_minima_mayorista: "",
     precio_distribuidor: "",
@@ -182,6 +183,7 @@ export default function EditarProductoPage() {
         costo_promedio: String(p.costo_promedio),
         markup: markup.toFixed(2),
         precio_venta: String(p.precio_venta),
+        precio_venta_usd: p.precio_venta_usd != null ? String(p.precio_venta_usd) : "",
         precio_mayorista: p.precio_mayorista != null ? String(p.precio_mayorista) : "",
         cantidad_minima_mayorista: p.cantidad_minima_mayorista != null ? String(p.cantidad_minima_mayorista) : "",
         precio_distribuidor: p.precio_distribuidor != null ? String(p.precio_distribuidor) : "",
@@ -329,6 +331,7 @@ export default function EditarProductoPage() {
         sku: form.sku.trim().toUpperCase(),
         costo_promedio: parseFloat(form.costo_promedio) || 0,
         precio_venta: parseFloat(form.precio_venta) || 0,
+        precio_venta_usd: form.precio_venta_usd.trim() !== "" ? parseFloat(form.precio_venta_usd) || null : null,
         precio_mayorista: form.precio_mayorista.trim() !== "" ? parseFloat(form.precio_mayorista) || null : null,
         cantidad_minima_mayorista: form.cantidad_minima_mayorista.trim() !== "" ? parseFloat(form.cantidad_minima_mayorista) || null : null,
         precio_distribuidor: form.precio_distribuidor.trim() !== "" ? parseFloat(form.precio_distribuidor) || null : null,
@@ -841,6 +844,19 @@ export default function EditarProductoPage() {
                 <p className="sm:col-span-2 text-xs text-gray-400">
                   Precios por canal: en Ventas el cajero elige Minorista, Mayorista o Distribuidor. El precio distribuidor es comercial (no es el costo).
                 </p>
+                <div className="sm:col-span-2">
+                  <label className={labelClass}>Precio de venta (USD) <span className="text-gray-400 font-normal">(opcional)</span></label>
+                  <MontoInput
+                    value={form.precio_venta_usd}
+                    onChange={(n) => setForm((prev) => ({ ...prev, precio_venta_usd: String(n) }))}
+                    placeholder="Ej: 12.50"
+                    className={inputClass}
+                    decimals={true}
+                  />
+                  <p className="mt-1.5 text-xs text-gray-400">
+                    Precio propio en dólares para clientes/exportadores que operan en USD. Es independiente del precio en Gs.: se carga a mano y no se convierte automáticamente. En Ventas, al elegir moneda USD, se usa este valor.
+                  </p>
+                </div>
                 <div className="sm:col-span-2">
                   <label className={labelClass}>IVA aplicado al vender</label>
                   <select

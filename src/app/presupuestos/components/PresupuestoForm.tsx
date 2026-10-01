@@ -16,6 +16,7 @@ import SearchableSelect from "@/components/ui/SearchableSelect";
  */
 
 type NivelPrecio = "minorista" | "mayorista" | "distribuidor";
+type MonedaPresupuesto = "PYG" | "USD";
 type ProductoLite = {
   id: string;
   nombre: string;
@@ -23,6 +24,8 @@ type ProductoLite = {
   precio_venta: number;
   precio_mayorista: number | null;
   precio_distribuidor: number | null;
+  /** Precio en USD (opcional). Se usa cuando el presupuesto es en dólares. */
+  precio_venta_usd: number | null;
   unidad_medida: string;
   tipo_iva: IvaTipoPresupuesto;
 };
@@ -36,7 +39,17 @@ type ClienteLite = {
   nivel_precio: NivelPrecio;
 };
 
-function precioParaNivel(p: ProductoLite, nivel: NivelPrecio): number {
+/**
+ * Precio unitario del producto en la moneda del presupuesto.
+ *  - PYG: precio de lista del canal (minorista/mayorista/distribuidor).
+ *  - USD: precio en dólares propio del producto (precio_venta_usd). NO se
+ *    convierte desde Gs.: si el producto no tiene precio USD, arranca en 0 y el
+ *    operador lo carga a mano. El nivel no aplica en USD (hay un único precio USD).
+ */
+function precioParaProducto(p: ProductoLite, nivel: NivelPrecio, moneda: MonedaPresupuesto): number {
+  if (moneda === "USD") {
+    return p.precio_venta_usd != null && p.precio_venta_usd > 0 ? p.precio_venta_usd : 0;
+  }
   if (nivel === "mayorista" && p.precio_mayorista != null && p.precio_mayorista > 0) return p.precio_mayorista;
   if (nivel === "distribuidor" && p.precio_distribuidor != null && p.precio_distribuidor > 0) return p.precio_distribuidor;
   return p.precio_venta;
@@ -56,6 +69,7 @@ export type PresupuestoFormItem = {
 /** Estado inicial del formulario en modo edición. */
 export type PresupuestoFormInicial = {
   cliente_id: string | null;
+  moneda?: string;
   cliente_nombre: string;
   cliente_ruc: string | null;
   cliente_telefono: string | null;
@@ -77,8 +91,10 @@ export type PresupuestoFormProps = {
   inicial?: PresupuestoFormInicial;
 };
 
-function fmtGs(n: number) {
-  return "Gs. " + (Number(n) || 0).toLocaleString("es-PY", { maximumFractionDigits: 0 });
+function fmtMoneda(n: number, moneda: MonedaPresupuesto) {
+  const v = Number(n) || 0;
+  const simbolo = moneda === "USD" ? "USD " : "Gs. ";
+  return simbolo + v.toLocaleString("es-PY", { maximumFractionDigits: moneda === "USD" ? 2 : 0 });
 }
 function round2(n: number) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -116,6 +132,11 @@ export default function PresupuestoForm({
   const [creandoCliente, setCreandoCliente] = useState(false);
   const [errorCliente, setErrorCliente] = useState<string | null>(null);
 
+  // Moneda del presupuesto (Gs. o USD). No fiscal: no requiere tipo de cambio.
+  const [moneda, setMoneda] = useState<MonedaPresupuesto>(
+    inicial?.moneda === "USD" ? "USD" : "PYG"
+  );
+
   // Items
   const [items, setItems] = useState<PresupuestoFormItem[]>(inicial?.items ?? []);
   const [selProd, setSelProd] = useState("");
@@ -148,6 +169,7 @@ export default function PresupuestoForm({
                 precio_venta: Number(p.precio_venta) || 0,
                 precio_mayorista: p.precio_mayorista != null ? Number(p.precio_mayorista) || null : null,
                 precio_distribuidor: p.precio_distribuidor != null ? Number(p.precio_distribuidor) || null : null,
+                precio_venta_usd: p.precio_venta_usd != null ? Number(p.precio_venta_usd) || null : null,
                 unidad_medida: String(p.unidad_medida ?? "UNIDAD"),
                 tipo_iva: (p.tipo_iva === "EXENTA" || p.tipo_iva === "5%" ? p.tipo_iva : "10%") as IvaTipoPresupuesto,
               }))
@@ -260,12 +282,30 @@ export default function PresupuestoForm({
         sku: p.sku || null,
         cantidad: 1,
         unidad_medida: p.unidad_medida,
-        precio_unitario: precioParaNivel(p, nivel),
+        precio_unitario: precioParaProducto(p, nivel, moneda),
         iva_tipo: p.tipo_iva,
         descuento: 0,
       },
     ]);
     setSelProd("");
+  }
+
+  /**
+   * Cambia la moneda del presupuesto y re-deriva el precio de cada ítem que
+   * proviene del inventario al precio de lista en esa moneda. Los ítems manuales
+   * (sin producto_id) conservan el valor cargado a mano.
+   */
+  function cambiarMoneda(nueva: MonedaPresupuesto) {
+    setMoneda(nueva);
+    const nivel = clientes.find((c) => c.id === clienteId)?.nivel_precio ?? "minorista";
+    setItems((prev) =>
+      prev.map((it) => {
+        if (!it.producto_id) return it;
+        const p = productos.find((x) => x.id === it.producto_id);
+        if (!p) return it;
+        return { ...it, precio_unitario: precioParaProducto(p, nivel, nueva) };
+      })
+    );
   }
 
   function agregarManual() {
@@ -328,7 +368,7 @@ export default function PresupuestoForm({
             cliente_ruc: clienteRuc.trim() || null,
             cliente_telefono: clienteTel.trim() || null,
             cliente_direccion: clienteDir.trim() || null,
-            moneda: "PYG",
+            moneda,
             validez_dias: validezDias.trim() === "" ? null : parseInt(validezDias, 10),
             forma_pago: formaPago.trim() || null,
             plazo_entrega: plazoEntrega.trim() || null,
@@ -444,7 +484,31 @@ export default function PresupuestoForm({
 
       {/* Productos */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-        <h2 className="text-sm font-semibold text-gray-700 mb-3">Productos</h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-gray-700">Productos</h2>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-gray-500">Moneda</span>
+            <div className="inline-flex overflow-hidden rounded-lg border border-slate-200">
+              {(["PYG", "USD"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => cambiarMoneda(m)}
+                  className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    moneda === m ? "bg-[#4FAEB2] text-white" : "bg-white text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {m === "PYG" ? "Guaraníes (Gs.)" : "Dólares (USD)"}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        {moneda === "USD" && (
+          <p className="mb-3 text-xs text-gray-400">
+            Presupuesto en dólares: los precios de inventario se cargan desde el precio USD del producto. Los productos sin precio USD arrancan en 0 — completalos a mano.
+          </p>
+        )}
         {/* Selector STICKY: al scrollear la página con muchos ítems, la barra para agregar
             nuevos productos queda siempre visible arriba, sin necesidad de subir manualmente. */}
         <div className="sticky top-0 z-10 -mx-5 mb-4 border-b border-slate-200 bg-white/95 px-5 py-3 backdrop-blur">
@@ -499,7 +563,7 @@ export default function PresupuestoForm({
                         <input type="number" min="0" step="0.01" value={it.cantidad} onChange={(e) => updItem(i, { cantidad: Number(e.target.value) })} className={inputClass} />
                       </td>
                       <td className="py-2 px-2">
-                        <input type="number" min="0" step="1" value={it.precio_unitario} onChange={(e) => updItem(i, { precio_unitario: Number(e.target.value) })} className={inputClass} />
+                        <input type="number" min="0" step={moneda === "USD" ? "0.01" : "1"} value={it.precio_unitario} onChange={(e) => updItem(i, { precio_unitario: Number(e.target.value) })} className={inputClass} />
                       </td>
                       <td className="py-2 px-2">
                         <select value={it.iva_tipo} onChange={(e) => updItem(i, { iva_tipo: e.target.value as IvaTipoPresupuesto })} className={`${inputClass} bg-white`}>
@@ -509,7 +573,7 @@ export default function PresupuestoForm({
                       <td className="py-2 px-2">
                         <input type="number" min="0" step="1" value={it.descuento} onChange={(e) => updItem(i, { descuento: Number(e.target.value) })} className={inputClass} />
                       </td>
-                      <td className="py-2 px-2 text-right tabular-nums font-medium">{fmtGs(t.total)}</td>
+                      <td className="py-2 px-2 text-right tabular-nums font-medium">{fmtMoneda(t.total, moneda)}</td>
                       <td className="py-2 pl-2 text-right">
                         <button onClick={() => delItem(i)} className="text-red-600 hover:text-red-700" aria-label="Eliminar"><Trash2 className="h-4 w-4" /></button>
                       </td>
@@ -523,10 +587,10 @@ export default function PresupuestoForm({
 
         {items.length > 0 && (
           <div className="mt-4 ml-auto w-full sm:w-72 text-sm space-y-1">
-            <div className="flex justify-between"><span className="text-gray-500">Subtotal (sin IVA)</span><span className="tabular-nums">{fmtGs(totales.subtotal)}</span></div>
-            <div className="flex justify-between"><span className="text-gray-500">IVA</span><span className="tabular-nums">{fmtGs(totales.iva)}</span></div>
-            {totales.desc > 0 && <div className="flex justify-between"><span className="text-gray-500">Descuentos</span><span className="tabular-nums">- {fmtGs(totales.desc)}</span></div>}
-            <div className="flex justify-between border-t border-slate-200 pt-1 font-semibold text-base"><span>Total</span><span className="tabular-nums text-[#4FAEB2]">{fmtGs(totales.total)}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Subtotal (sin IVA)</span><span className="tabular-nums">{fmtMoneda(totales.subtotal, moneda)}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">IVA</span><span className="tabular-nums">{fmtMoneda(totales.iva, moneda)}</span></div>
+            {totales.desc > 0 && <div className="flex justify-between"><span className="text-gray-500">Descuentos</span><span className="tabular-nums">- {fmtMoneda(totales.desc, moneda)}</span></div>}
+            <div className="flex justify-between border-t border-slate-200 pt-1 font-semibold text-base"><span>Total</span><span className="tabular-nums text-[#4FAEB2]">{fmtMoneda(totales.total, moneda)}</span></div>
           </div>
         )}
       </div>

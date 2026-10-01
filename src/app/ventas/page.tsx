@@ -22,6 +22,26 @@ function formatGs(valor: number) {
   return `Gs. ${Math.round(valor).toLocaleString("es-PY")}`;
 }
 
+function formatUsd(valor: number) {
+  return `USD ${valor.toLocaleString("es-PY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** ¿La venta se operó en dólares? */
+function esVentaUsd(v: Venta): boolean {
+  return v.moneda === "USD";
+}
+
+/** Total de la venta en su moneda: USD desde los precios originales, o Gs. */
+function totalEnMoneda(v: Venta): number {
+  if (esVentaUsd(v)) return v.items.reduce((s, i) => s + i.cantidad * (i.precio_venta_original || 0), 0);
+  return v.total;
+}
+
+/** Formatea un importe (dado en Gs. y en su original) según la moneda de la venta. */
+function formatMonedaVenta(v: Venta, usd: number, gs: number): string {
+  return esVentaUsd(v) ? formatUsd(usd) : formatGs(gs);
+}
+
 function formatFecha(iso: string) {
   try {
     const d    = new Date(iso);
@@ -426,7 +446,17 @@ export default function VentasPage() {
                         </span>
                       </td>
                       <td className="py-4 pr-4 text-right tabular-nums font-semibold text-gray-800 align-middle">
-                        {formatGs(v.total)}
+                        {esVentaUsd(v) ? (
+                          <div className="flex flex-col items-end">
+                            <span className="inline-flex items-center gap-1">
+                              <span className="rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-bold uppercase text-emerald-700">USD</span>
+                              {formatUsd(totalEnMoneda(v))}
+                            </span>
+                            <span className="text-[10px] font-normal text-slate-400">≈ {formatGs(v.total)}</span>
+                          </div>
+                        ) : (
+                          formatGs(v.total)
+                        )}
                       </td>
                       <td className="hidden py-4 pr-4 align-middle lg:table-cell">
                         <span className={`px-2 py-1 rounded-full text-xs font-semibold ${tipoVentaBadge[v.tipo_venta]}`}>
@@ -574,14 +604,14 @@ export default function VentasPage() {
                                       <td className="py-2 pr-3 font-mono text-xs text-slate-500">{it.sku || "—"}</td>
                                       <td className="py-2 pr-3 text-slate-800">{it.producto_nombre}</td>
                                       <td className="py-2 pr-3 text-right tabular-nums text-slate-700">{it.cantidad}</td>
-                                      <td className="py-2 pr-3 text-right tabular-nums text-slate-700">{formatGs(it.precio_venta)}</td>
+                                      <td className="py-2 pr-3 text-right tabular-nums text-slate-700">{formatMonedaVenta(v, it.precio_venta_original || 0, it.precio_venta)}</td>
                                       <td className="py-2 pr-3">
                                         <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
                                           {ivaLabel[it.tipo_iva]}
                                         </span>
                                       </td>
                                       <td className="py-2 text-right tabular-nums font-semibold text-slate-800">
-                                        {formatGs(it.total_linea)}
+                                        {formatMonedaVenta(v, it.cantidad * (it.precio_venta_original || 0), it.total_linea)}
                                       </td>
                                     </tr>
                                   ))}
@@ -592,7 +622,11 @@ export default function VentasPage() {
                                       Total
                                     </td>
                                     <td className="py-2 text-right tabular-nums font-bold text-slate-900">
-                                      {formatGs(v.total)}
+                                      {esVentaUsd(v) ? (
+                                        <span>{formatUsd(totalEnMoneda(v))} <span className="text-[10px] font-normal text-slate-400">(≈ {formatGs(v.total)})</span></span>
+                                      ) : (
+                                        formatGs(v.total)
+                                      )}
                                     </td>
                                   </tr>
                                 </tfoot>

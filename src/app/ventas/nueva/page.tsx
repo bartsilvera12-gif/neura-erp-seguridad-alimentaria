@@ -22,6 +22,16 @@ function formatGs(valor: number) {
   return `Gs. ${Math.round(valor).toLocaleString("es-PY")}`;
 }
 
+/** Formatea un monto en USD con 2 decimales. */
+function formatUsd(valor: number) {
+  return `USD ${valor.toLocaleString("es-PY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** Formatea un monto en la moneda de la venta (USD con decimales, Gs. entero). */
+function formatMoneda(valor: number, moneda: MonedaVenta) {
+  return moneda === "USD" ? formatUsd(valor) : formatGs(valor);
+}
+
 /** Miniatura del producto con fallback a un ícono cuando no hay imagen. */
 function ProductoThumb({ url, alt }: { url?: string | null; alt: string }) {
   if (url) {
@@ -138,8 +148,16 @@ export default function NuevaVentaPage() {
   const [pedidoNumero, setPedidoNumero] = useState<string | null>(null);
 
   // ── Condiciones de la venta ───────────────────────────────────────────────
-  // Instancia dedicada: siempre Guaraníes.
-  const moneda: MonedaVenta = "GS";
+  // Moneda de la operación. Guaraníes por defecto; el cajero puede pasar a USD
+  // para clientes/exportadores que operan en dólares. En USD, cada línea usa el
+  // precio USD del producto (precio_venta_usd) como `precio_venta_original` y se
+  // guarda además su equivalente en Gs. (precio_venta = original × tipo_cambio),
+  // manteniendo intactos los reportes y la contabilidad en guaraníes.
+  const [moneda, setMoneda] = useState<MonedaVenta>("GS");
+  // Tipo de cambio USD→Gs. 1 mientras la moneda es Gs.; al pasar a USD se
+  // precarga la cotización vigente y el cajero puede ajustarlo.
+  const [tipoCambio, setTipoCambio] = useState("1");
+  const [cotizacionInfo, setCotizacionInfo] = useState<string | null>(null);
 
   // Contado / Crédito (campos ya existentes en `ventas`: tipo_venta + plazo_dias).
   const [tipoVenta, setTipoVenta] = useState<TipoVenta>("CONTADO");
@@ -204,6 +222,7 @@ export default function NuevaVentaPage() {
       sku: p.sku,
       tipo_iva: p.tipo_iva,
       precio_venta: p.precio_venta,
+      precio_venta_usd: p.precio_venta_usd ?? null,
       precio_mayorista: p.precio_mayorista ?? null,
       precio_distribuidor: p.precio_distribuidor ?? null,
       stock_actual: p.stock_actual,
@@ -225,12 +244,15 @@ export default function NuevaVentaPage() {
    */
   function handleAgregarDesdePicker(payload: AgregarVentaPayload): boolean {
     const { producto: p, cantidad, precio_input, iva, tipo_precio } = payload;
-    const precioPyg = precio_input;
+    // `precio_input` viene en la moneda de la venta. El precio_venta (Gs.) es el
+    // equivalente guaraní: en USD se multiplica por el tipo de cambio.
+    const precioOriginal = precio_input;
+    const precioPyg = moneda === "USD" ? Math.round(precio_input * tipoCambioNum) : precio_input;
     // Verificar stock vs lo ya cargado SOLO si el producto controla stock.
     // Venta sin stock (Fase 5): NO se bloquea por falta de stock al agregar; la
     // confirmación se pide al registrar la venta. El Menú (controla_stock=false) tampoco valida.
     // IVA incluido: el total de la línea es precio × cantidad; el IVA se desglosa
-    // desde adentro y el subtotal (base imponible) = total − IVA.
+    // desde adentro y el subtotal (base imponible) = total − IVA. Todo en Gs.
     const totalLinea = cantidad * precioPyg;
     const montoIva = calcIva(iva, totalLinea);
     const subtotal = totalLinea - montoIva;
@@ -247,7 +269,7 @@ export default function NuevaVentaPage() {
         producto_nombre: p.nombre,
         sku: p.sku,
         cantidad,
-        precio_venta_original: precio_input,
+        precio_venta_original: precioOriginal,
         precio_venta: precioPyg,
         tipo_iva: iva,
         tipo_precio,
@@ -480,11 +502,27 @@ export default function NuevaVentaPage() {
   }, [comboHighlight]);
 
   // ── Cálculos ───────────────────────────────────────────────────────────────
-  const tipoCambioNum = 1;
+  // En Gs. el tipo de cambio es 1. En USD se usa el valor cargado por el cajero.
+  const tipoCambioNum = moneda === "USD" ? (parseFloat(tipoCambio) || 0) : 1;
+  const tipoCambioValido = moneda === "GS" || tipoCambioNum >= 1;
 
+  // Totales PERSISTIDOS: siempre en Gs. (invariante del modelo: `precio_venta`,
+  // subtotal, monto_iva y total_linea viven en guaraníes). Los reportes suman
+  // estos valores, así que las ventas en USD contribuyen su equivalente en Gs.
   const totalSubtotal = items.reduce((s, i) => s + i.subtotal, 0);
   const totalIva      = items.reduce((s, i) => s + i.monto_iva, 0);
   const totalGeneral  = items.reduce((s, i) => s + i.total_linea, 0);
+
+  // Totales para MOSTRAR/COBRAR en la moneda elegida. En USD se calculan desde
+  // `precio_venta_original` (el precio en dólares que cotiza el cajero), no
+  // dividiendo el Gs., para no arrastrar el redondeo por línea.
+  const totalDisplay = moneda === "USD"
+    ? items.reduce((s, i) => s + i.cantidad * i.precio_venta_original, 0)
+    : totalGeneral;
+  const ivaDisplay = moneda === "USD"
+    ? items.reduce((s, i) => s + calcIva(i.tipo_iva, i.cantidad * i.precio_venta_original), 0)
+    : totalIva;
+  const subtotalDisplay = moneda === "USD" ? totalDisplay - ivaDisplay : totalSubtotal;
   // Condición de venta: si es Crédito, exigir plazo de al menos 1 día.
   const plazoDiasNum = parseInt(plazoDias) || 0;
   // Crédito exige cliente seleccionado Y plazo/vencimiento (≥1 día). Genera cuenta por cobrar.
@@ -507,7 +545,8 @@ export default function NuevaVentaPage() {
     creditoValido &&
     (!clienteObligatorio || !!clienteId) &&
     lineasSinMotivo === 0 &&
-    lineasCobradasSinPrecio === 0;
+    lineasCobradasSinPrecio === 0 &&
+    tipoCambioValido;
 
   // Cliente (opcional) — selección + filtrado del buscador.
   const clienteSel = clientes.find((c) => c.id === clienteId) ?? null;
@@ -523,9 +562,9 @@ export default function NuevaVentaPage() {
     : entidades.filter((e) => productoMatchesQuery(entidadQuery, e.nombre, e.codigo))
   ).slice(0, 50);
 
-  // Vuelto (solo informativo, no se persiste)
+  // Vuelto (solo informativo, no se persiste). En la moneda de la venta.
   const montoRecibidoNum = parseFloat(montoRecibido) || 0;
-  const vuelto           = montoRecibidoNum - totalGeneral;
+  const vuelto           = montoRecibidoNum - totalDisplay;
 
   // ── Resultados del autocomplete de producto ────────────────────────────────
   // Vienen del endpoint de búsqueda server-side (token search sobre TODO el
@@ -566,13 +605,15 @@ export default function NuevaVentaPage() {
           return recomputeLinea({ ...it, tipo_salida: tipo, precio_venta: 0, precio_venta_original: 0 });
         }
         const prod = productos.find((p) => p.id === it.producto_id);
-        const precio = prod ? precioPorTipo(prod, it.tipo_precio ?? "minorista") : it.precio_venta;
+        const precios = prod
+          ? preciosParaLinea(prod, it.tipo_precio ?? "minorista")
+          : { original: it.precio_venta_original, gs: it.precio_venta };
         return recomputeLinea({
           ...it,
           tipo_salida: "venta",
           motivo_salida: null,
-          precio_venta: precio,
-          precio_venta_original: precio,
+          precio_venta: precios.gs,
+          precio_venta_original: precios.original,
         });
       })
     );
@@ -584,10 +625,70 @@ export default function NuevaVentaPage() {
     return { ...l, total_linea, monto_iva, subtotal: total_linea - monto_iva };
   }
 
+  /**
+   * Precios de una línea nueva según la moneda de la venta:
+   *  - Gs.: `original` y `gs` son el precio de lista del canal (precioPorTipo).
+   *  - USD: `original` = precio_venta_usd del producto (0 si no tiene, el cajero
+   *    lo carga a mano); `gs` = original × tipo de cambio (equivalente guaraní).
+   * No hay conversión automática Gs.→USD: si el producto no tiene precio USD,
+   * arranca en 0 para que el operador lo ingrese.
+   */
+  function preciosParaLinea(p: Producto, tipo: TipoPrecioVenta): { original: number; gs: number } {
+    if (moneda === "USD") {
+      const usd = p.precio_venta_usd != null && p.precio_venta_usd > 0 ? p.precio_venta_usd : 0;
+      return { original: usd, gs: Math.round(usd * tipoCambioNum) };
+    }
+    const gs = precioPorTipo(p, tipo);
+    return { original: gs, gs };
+  }
+
+  /**
+   * Cambia la moneda de la venta y re-deriva el precio de cada línea al precio de
+   * lista en esa moneda (respetando muestras/regalos, que siguen en 0). Al pasar
+   * a USD precarga la cotización vigente si el tipo de cambio sigue en 1.
+   */
+  function cambiarMoneda(nueva: MonedaVenta) {
+    setMoneda(nueva);
+    setItems((prev) =>
+      prev.map((it) => {
+        if (esSalidaSinCargo(it.tipo_salida)) return it;
+        const prod = productos.find((p) => p.id === it.producto_id);
+        if (!prod) return it;
+        const tc = nueva === "USD" ? (parseFloat(tipoCambio) || 0) : 1;
+        const tipo = it.tipo_precio ?? "minorista";
+        if (nueva === "USD") {
+          const usd = prod.precio_venta_usd != null && prod.precio_venta_usd > 0 ? prod.precio_venta_usd : 0;
+          return recomputeLinea({ ...it, precio_venta_original: usd, precio_venta: Math.round(usd * tc) });
+        }
+        const gs = precioPorTipo(prod, tipo);
+        return recomputeLinea({ ...it, precio_venta_original: gs, precio_venta: gs });
+      })
+    );
+    if (nueva === "USD" && (parseFloat(tipoCambio) || 0) <= 1) {
+      void precargarCotizacion();
+    }
+  }
+
+  /** Trae la cotización USD→PYG vigente y la usa como tipo de cambio sugerido. */
+  async function precargarCotizacion() {
+    try {
+      const r = await fetch("/api/tipo-cambio?origen=USD&destino=PYG", { credentials: "include", cache: "no-store" });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j?.success && Number(j.data?.cotizacion) > 0) {
+        setTipoCambio(String(Number(j.data.cotizacion)));
+        setCotizacionInfo(`Cotización vigente: ${Number(j.data.cotizacion).toLocaleString("es-PY")} Gs./USD`);
+      } else {
+        setCotizacionInfo("No hay cotización vigente cargada. Ingresá el tipo de cambio manualmente.");
+      }
+    } catch {
+      setCotizacionInfo("No se pudo obtener la cotización. Ingresá el tipo de cambio manualmente.");
+    }
+  }
+
   /** Agrega un producto directo desde el autocomplete: si ya está suma +1; si no,
    *  crea la línea. Luego limpia el input y devuelve el foco (carga rápida tipo caja). */
   function agregarProductoRapido(p: Producto) {
-    const precio = precioPorTipo(p, "minorista");
+    const { original, gs } = preciosParaLinea(p, "minorista");
     setProductos((prev) => (prev.find((x) => x.id === p.id) ? prev : [...prev, p]));
     setItems((prev) => {
       const idx = prev.findIndex((it) => it.producto_id === p.id);
@@ -601,8 +702,8 @@ export default function NuevaVentaPage() {
           producto_nombre: p.nombre,
           sku: p.sku,
           cantidad: 1,
-          precio_venta_original: precio,
-          precio_venta: precio,
+          precio_venta_original: original,
+          precio_venta: gs,
           tipo_iva: p.tipo_iva ?? "10%",
           tipo_precio: "minorista",
           subtotal: 0,
@@ -618,8 +719,40 @@ export default function NuevaVentaPage() {
     setTimeout(() => comboInputRef.current?.focus(), 0);
   }
 
+  // Al cambiar el tipo de cambio (moneda USD), recalcular el equivalente en Gs.
+  // de cada línea manteniendo el precio en USD (precio_venta_original) tal cual.
+  useEffect(() => {
+    if (moneda !== "USD") return;
+    setItems((prev) =>
+      prev.map((it) =>
+        esSalidaSinCargo(it.tipo_salida)
+          ? it
+          : recomputeLinea({ ...it, precio_venta: Math.round((it.precio_venta_original || 0) * tipoCambioNum) })
+      )
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tipoCambioNum]);
+
   function updateItemCampo(idx: number, patch: Partial<LineaVenta>) {
     setItems((prev) => prev.map((it, i) => (i === idx ? recomputeLinea({ ...it, ...patch }) : it)));
+  }
+
+  /**
+   * Setea el precio unitario que edita el cajero, interpretado en la moneda de la
+   * venta. En USD, el valor es el precio en dólares (precio_venta_original) y el
+   * Gs. se deriva con el tipo de cambio; en Gs. ambos coinciden.
+   */
+  function setPrecioUnitario(idx: number, valor: number) {
+    const v = Math.max(0, valor);
+    setItems((prev) =>
+      prev.map((it, i) => {
+        if (i !== idx) return it;
+        if (moneda === "USD") {
+          return recomputeLinea({ ...it, precio_venta_original: v, precio_venta: Math.round(v * tipoCambioNum) });
+        }
+        return recomputeLinea({ ...it, precio_venta_original: v, precio_venta: v });
+      })
+    );
   }
   function changeCantidadItem(idx: number, delta: number) {
     setItems((prev) => prev.map((it, i) => (i === idx ? recomputeLinea({ ...it, cantidad: Math.max(1, it.cantidad + delta) }) : it)));
@@ -629,8 +762,8 @@ export default function NuevaVentaPage() {
       prev.map((it, i) => {
         if (i !== idx) return it;
         const prod = productos.find((p) => p.id === it.producto_id);
-        const precio = prod ? precioPorTipo(prod, tipo) : it.precio_venta;
-        return recomputeLinea({ ...it, tipo_precio: tipo, precio_venta: precio, precio_venta_original: precio });
+        const precios = prod ? preciosParaLinea(prod, tipo) : { original: it.precio_venta_original, gs: it.precio_venta };
+        return recomputeLinea({ ...it, tipo_precio: tipo, precio_venta: precios.gs, precio_venta_original: precios.original });
       })
     );
   }
@@ -689,6 +822,13 @@ export default function NuevaVentaPage() {
       );
       return;
     }
+    // Venta en USD: exige un tipo de cambio válido (≥ 1) para calcular el
+    // equivalente en Gs. que se persiste y usan los reportes.
+    if (!tipoCambioValido) {
+      isSubmittingRef.current = false;
+      setErrorVenta("Ingresá el tipo de cambio (Gs. por USD) para una venta en dólares.");
+      return;
+    }
     setGuardando(true);
     try {
       const resultado = await saveVenta(
@@ -696,6 +836,7 @@ export default function NuevaVentaPage() {
           items,
           moneda,
           tipo_cambio:  tipoCambioNum,
+          // Totales SIEMPRE en Gs. (equivalente guaraní), coherente con las líneas.
           subtotal:     totalSubtotal,
           monto_iva:    totalIva,
           total:        totalGeneral,
@@ -920,6 +1061,41 @@ export default function NuevaVentaPage() {
               )}
             </div>
 
+            {/* Moneda de la operación: Gs. o USD. En USD el precio de cada línea
+                usa el precio en dólares del producto y se pide el tipo de cambio. */}
+            <div>
+              <label className={labelClass}>Moneda</label>
+              <SegmentedControl<MonedaVenta>
+                value={moneda}
+                options={[
+                  { value: "GS", label: "Guaraníes (Gs.)" },
+                  { value: "USD", label: "Dólares (USD)" },
+                ]}
+                onChange={(v) => cambiarMoneda(v)}
+              />
+              {moneda === "USD" && (
+                <div className="mt-3">
+                  <label className={labelClass}>Tipo de cambio (Gs. por USD)</label>
+                  <MontoInput
+                    value={tipoCambio}
+                    onChange={(n) => { setTipoCambio(String(n)); setCotizacionInfo(null); }}
+                    placeholder="Ej: 7300"
+                    className={`${inputClass} ${!tipoCambioValido ? "border-red-300 bg-red-50" : ""}`}
+                    decimals={false}
+                  />
+                  {!tipoCambioValido && (
+                    <p className="mt-1 text-[11px] text-red-600">Ingresá el tipo de cambio (Gs. por USD) para vender en dólares.</p>
+                  )}
+                  {cotizacionInfo && (
+                    <p className="mt-1 text-[11px] text-slate-500">{cotizacionInfo}</p>
+                  )}
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Los precios se muestran y cobran en USD; se guarda además el equivalente en Gs. ({formatGs(totalGeneral)}).
+                  </p>
+                </div>
+              )}
+            </div>
+
             {/* Documento a emitir — SIFEN no configurado en esta instancia: la venta
                 sale siempre como ticket. El selector Factura/Ticket se oculta hasta
                 activar la facturación electrónica (ver comentario en tipoDocumento). */}
@@ -995,7 +1171,11 @@ export default function NuevaVentaPage() {
                                 </span>
                               </div>
                             </div>
-                            <span className="shrink-0 text-sm font-bold tabular-nums text-slate-800">{formatGs(precioPorTipo(p, "minorista"))}</span>
+                            <span className="shrink-0 text-sm font-bold tabular-nums text-slate-800">
+                              {moneda === "USD"
+                                ? formatUsd(preciosParaLinea(p, "minorista").original)
+                                : formatGs(precioPorTipo(p, "minorista"))}
+                            </span>
                             <span className="shrink-0 inline-flex items-center gap-1 rounded-lg bg-[#4FAEB2]/12 px-2.5 py-1 text-xs font-bold text-[#3F8E91]">
                               <Plus className="h-3.5 w-3.5" strokeWidth={2.5} /> Agregar
                             </span>
@@ -1132,13 +1312,14 @@ export default function NuevaVentaPage() {
                               <button type="button" onClick={() => changeCantidadItem(idx, 1)} className="h-8 w-8 rounded-r-md text-slate-500 hover:bg-slate-100"><Plus className="mx-auto h-3.5 w-3.5" /></button>
                             </div>
                           </td>
-                          {/* Precio unitario editable */}
+                          {/* Precio unitario editable (en la moneda de la venta) */}
                           <td className="px-3 py-2.5 text-right">
                             <input
-                              type="number" min={0} value={item.precio_venta}
-                              onChange={(e) => updateItemCampo(idx, { precio_venta: Math.max(0, Number(e.target.value) || 0) })}
+                              type="number" min={0} step={moneda === "USD" ? "0.01" : "1"}
+                              value={moneda === "USD" ? item.precio_venta_original : item.precio_venta}
+                              onChange={(e) => setPrecioUnitario(idx, Number(e.target.value) || 0)}
                               disabled={esSalidaSinCargo(item.tipo_salida)}
-                              title={esSalidaSinCargo(item.tipo_salida) ? "Muestra/regalo: el precio queda en 0" : undefined}
+                              title={esSalidaSinCargo(item.tipo_salida) ? "Muestra/regalo: el precio queda en 0" : (moneda === "USD" ? "Precio en USD" : undefined)}
                               className={`h-8 w-28 rounded-md border px-2 text-right text-sm tabular-nums ${
                                 esSalidaSinCargo(item.tipo_salida)
                                   ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
@@ -1146,6 +1327,9 @@ export default function NuevaVentaPage() {
                               }`}
                               aria-label={`Precio unitario de ${item.producto_nombre}`}
                             />
+                            {moneda === "USD" && !esSalidaSinCargo(item.tipo_salida) && (
+                              <p className="mt-0.5 text-[10px] text-slate-400 tabular-nums">≈ {formatGs(item.precio_venta)}</p>
+                            )}
                           </td>
                           {/* Stock */}
                           <td className="px-3 py-2.5 text-right">
@@ -1153,9 +1337,13 @@ export default function NuevaVentaPage() {
                               {!controla ? "—" : stock}
                             </span>
                           </td>
-                          {/* Total de línea */}
+                          {/* Total de línea (en la moneda de la venta) */}
                           <td className="px-3 py-2.5 text-right">
-                            <span className="text-sm font-bold tabular-nums text-slate-900">{formatGs(item.total_linea)}</span>
+                            <span className="text-sm font-bold tabular-nums text-slate-900">
+                              {moneda === "USD"
+                                ? formatUsd(item.cantidad * item.precio_venta_original)
+                                : formatGs(item.total_linea)}
+                            </span>
                           </td>
                           {/* Quitar */}
                           <td className="px-2 py-2.5 text-center">
@@ -1181,18 +1369,24 @@ export default function NuevaVentaPage() {
                   <div className="space-y-1.5">
                     <div className="flex justify-between text-sm text-gray-600">
                       <span>Subtotal</span>
-                      <span className="tabular-nums font-medium">{formatGs(totalSubtotal)}</span>
+                      <span className="tabular-nums font-medium">{formatMoneda(subtotalDisplay, moneda)}</span>
                     </div>
                     <div className="flex justify-between text-sm text-gray-600">
                       <span>IVA</span>
                       <span className="tabular-nums font-medium">
-                        {totalIva > 0 ? formatGs(totalIva) : "—"}
+                        {ivaDisplay > 0 ? formatMoneda(ivaDisplay, moneda) : "—"}
                       </span>
                     </div>
                     <div className="flex justify-between text-base font-bold text-gray-900 pt-2 border-t border-gray-200">
                       <span>TOTAL</span>
-                      <span className="tabular-nums">{formatGs(totalGeneral)}</span>
+                      <span className="tabular-nums">{formatMoneda(totalDisplay, moneda)}</span>
                     </div>
+                    {moneda === "USD" && (
+                      <div className="flex justify-between text-[11px] text-slate-400 pt-0.5">
+                        <span>Equivalente en Gs.</span>
+                        <span className="tabular-nums">{formatGs(totalGeneral)}</span>
+                      </div>
+                    )}
                   </div>
 
                   {tipoVenta === "CONTADO" && (
@@ -1225,15 +1419,15 @@ export default function NuevaVentaPage() {
                           <MontoInput
                             value={montoRecibido}
                             onChange={(n) => setMontoRecibido(String(n))}
-                            placeholder="Monto recibido (Gs.) — opcional"
+                            placeholder={`Monto recibido (${moneda === "USD" ? "USD" : "Gs."}) — opcional`}
                             className={inputClass}
-                            decimals={false}
+                            decimals={moneda === "USD"}
                           />
                           {montoRecibidoNum > 0 && (
                             <div className="flex justify-between text-sm">
                               <span className="text-gray-600">{vuelto >= 0 ? "Vuelto" : "Falta"}</span>
                               <span className={`font-bold tabular-nums ${vuelto >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-                                {formatGs(Math.abs(vuelto))}
+                                {formatMoneda(Math.abs(vuelto), moneda)}
                               </span>
                             </div>
                           )}

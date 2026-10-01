@@ -11,7 +11,14 @@ export interface Producto {
   nombre: string;
   sku: string;
   costo_promedio: number;
-  precio_venta: number;            // precio minorista
+  precio_venta: number;            // precio minorista (en Gs.)
+  /**
+   * Precio de venta en USD (opcional). Campo comercial INDEPENDIENTE cargado a
+   * mano — NO es una conversión de `precio_venta`. Se usa como precio de la
+   * línea cuando la venta se cobra en USD. `null`/ausente = el producto no
+   * tiene precio USD definido.
+   */
+  precio_venta_usd?: number | null;
   /** Precio mayorista (opcional, informativo — no se aplica automáticamente en ventas). */
   precio_mayorista?: number | null;
   /** Cantidad mínima para precio mayorista (opcional, informativo). */

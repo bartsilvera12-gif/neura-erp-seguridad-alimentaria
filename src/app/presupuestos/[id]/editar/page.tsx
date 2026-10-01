@@ -52,6 +52,7 @@ export default function EditarPresupuestoPage() {
       setNumeroControl(String(p.numero_control ?? ""));
       setInicial({
         cliente_id: p.cliente_id ? String(p.cliente_id) : null,
+        moneda: String(p.moneda ?? "PYG"),
         cliente_nombre: String(p.cliente_nombre ?? ""),
         cliente_ruc: p.cliente_ruc ? String(p.cliente_ruc) : null,
         cliente_telefono: p.cliente_telefono ? String(p.cliente_telefono) : null,

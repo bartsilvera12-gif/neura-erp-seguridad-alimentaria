@@ -511,6 +511,16 @@ export async function facturarPresupuestoDirecto(
   if (p.estado !== "aprobado") {
     throw new Error("Solo se puede facturar un presupuesto en estado 'aprobado'.");
   }
+  // La facturación directa crea la venta con tipo de cambio 1 y el precio tal
+  // cual (sin equivalente en Gs.). Para un presupuesto en USD eso generaría una
+  // venta/factura con montos incoherentes. Hasta implementar el tipo de cambio
+  // en esta ruta, un presupuesto USD se factura convirtiéndolo en pedido y
+  // emitiendo desde Ventas (ahí el cajero carga la moneda y el tipo de cambio).
+  if (String(p.moneda ?? "PYG") === "USD") {
+    throw new Error(
+      "Este presupuesto está en dólares. Para facturarlo, convertilo en pedido y emití la venta desde Ventas, donde se carga el tipo de cambio."
+    );
+  }
 
   const itq = await sb
     .from("presupuesto_items")

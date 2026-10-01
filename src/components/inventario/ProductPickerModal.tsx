@@ -11,6 +11,8 @@ export interface ProductoPickerItem {
   precio_venta: number;
   precio_mayorista: number;
   precio_distribuidor?: number | null;
+  /** Precio de venta en USD (opcional). Se usa como precio de la línea cuando la venta es en USD. */
+  precio_venta_usd?: number | null;
   costo_promedio: number;
   stock_actual: number;
   stock_minimo: number;
@@ -88,6 +90,10 @@ function formatGs(v: number): string {
   return `Gs. ${Math.round(v).toLocaleString("es-PY")}`;
 }
 
+function formatUsd(v: number): string {
+  return `USD ${v.toLocaleString("es-PY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 export default function ProductPickerModal({
   open, onClose, onAgregar, excludeIds = [], moneda = "GS", tipoCambio = 1, ivaDefault = "10%",
   tipoPrecioDefault = "minorista",
@@ -107,16 +113,29 @@ export default function ProductPickerModal({
   const [tipoPrecio, setTipoPrecio] = useState<"minorista" | "mayorista" | "distribuidor">(tipoPrecioDefault);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  /** Precio en la moneda activa de la venta (string para el input). */
-  function precioEnMonedaStr(precioGs: number): string {
-    if (moneda === "USD" && tipoCambio > 0) return String(Math.round((precioGs / tipoCambio) * 100) / 100);
-    return String(Math.round(precioGs));
+  /**
+   * Precio unitario en la moneda activa de la venta, para el tipo elegido.
+   *  - USD: el precio USD PROPIO del producto (precio_venta_usd). NO se convierte
+   *    desde Gs.: si el producto no tiene precio USD, arranca en 0 y el operador
+   *    lo carga a mano. El tipo de precio (min/may/dist) no aplica en USD.
+   *  - Gs.: precio de lista del canal.
+   */
+  function precioMonedaParaTipo(p: ProductoPickerItem, tipo: "minorista" | "mayorista" | "distribuidor"): number {
+    if (moneda === "USD") {
+      return p.precio_venta_usd != null && p.precio_venta_usd > 0 ? p.precio_venta_usd : 0;
+    }
+    return precioPorTipoPicker(p, tipo);
+  }
+
+  /** Precio del tipo, formateado en la moneda activa (para las etiquetas de los botones). */
+  function precioTipoLabel(p: ProductoPickerItem, tipo: "minorista" | "mayorista" | "distribuidor"): string {
+    return moneda === "USD" ? formatUsd(precioMonedaParaTipo(p, tipo)) : formatGs(precioPorTipoPicker(p, tipo));
   }
 
   /** Cambia el tipo de precio del producto seleccionado y ajusta el precio unitario. */
   function handleTipoPrecio(tipo: "minorista" | "mayorista" | "distribuidor") {
     setTipoPrecio(tipo);
-    if (sel) setPrecio(precioEnMonedaStr(precioPorTipoPicker(sel, tipo)));
+    if (sel) setPrecio(String(precioMonedaParaTipo(sel, tipo)));
     setFeedback(null);
   }
 
@@ -159,7 +178,7 @@ export default function ProductPickerModal({
     setCantidad("1");
     // Precio inicial: usa el nivel del cliente (default 'minorista' si no vino).
     setTipoPrecio(tipoPrecioDefault);
-    setPrecio(precioEnMonedaStr(precioPorTipoPicker(p, tipoPrecioDefault)));
+    setPrecio(String(precioMonedaParaTipo(p, tipoPrecioDefault)));
     setIva(p.tipo_iva === "EXENTA" || p.tipo_iva === "5%" || p.tipo_iva === "10%" ? p.tipo_iva : ivaDefault);
     setFeedback(null);
   }
@@ -385,7 +404,7 @@ export default function ProductPickerModal({
                             {t === "minorista" ? "Minorista" : t === "mayorista" ? "Mayorista" : "Distribuidor"}
                           </span>
                           <span className={`block text-[10px] tabular-nums ${tipoPrecio === t ? "text-white/90" : "text-slate-400"}`}>
-                            {formatGs(precioPorTipoPicker(sel, t))}
+                            {precioTipoLabel(sel, t)}
                           </span>
                         </button>
                       ))}
@@ -433,9 +452,23 @@ export default function ProductPickerModal({
                   </div>
 
                   <div className="text-xs text-slate-500 space-y-0.5 pt-1">
-                    <div className="flex justify-between"><span>Subtotal</span><span className="tabular-nums">{formatGs(subtotal)}</span></div>
-                    <div className="flex justify-between"><span>IVA</span><span className="tabular-nums">{ivaMonto > 0 ? formatGs(ivaMonto) : "—"}</span></div>
-                    <div className="flex justify-between font-bold text-slate-800 pt-1 border-t border-slate-200"><span>Total línea</span><span className="tabular-nums">{formatGs(totalLinea)}</span></div>
+                    {(() => {
+                      const cant = parseInt(cantidad, 10) || 0;
+                      const precioMon = parseFloat(precio) || 0;
+                      const subMon = moneda === "USD" ? cant * precioMon : subtotal;
+                      const ivaMon = moneda === "USD" ? (iva === "10%" ? subMon * 0.10 : iva === "5%" ? subMon * 0.05 : 0) : ivaMonto;
+                      const fmt = (v: number) => (moneda === "USD" ? formatUsd(v) : formatGs(v));
+                      return (
+                        <>
+                          <div className="flex justify-between"><span>Subtotal</span><span className="tabular-nums">{fmt(subMon)}</span></div>
+                          <div className="flex justify-between"><span>IVA</span><span className="tabular-nums">{ivaMon > 0 ? fmt(ivaMon) : "—"}</span></div>
+                          <div className="flex justify-between font-bold text-slate-800 pt-1 border-t border-slate-200"><span>Total línea</span><span className="tabular-nums">{fmt(subMon)}</span></div>
+                          {moneda === "USD" && precioMon > 0 && (
+                            <div className="flex justify-between text-[11px] text-slate-400"><span>Equivalente en Gs.</span><span className="tabular-nums">{formatGs(totalLinea)}</span></div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
                 </div>

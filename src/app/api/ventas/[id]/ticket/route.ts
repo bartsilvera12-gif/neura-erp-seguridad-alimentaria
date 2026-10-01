@@ -106,6 +106,10 @@ function formatGs(v: number): string {
   return `Gs. ${Math.round(v).toLocaleString("es-PY")}`;
 }
 
+function formatUsd(v: number): string {
+  return `USD ${v.toLocaleString("es-PY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 /** Fecha/hora en zona Paraguay. El server corre en UTC; sin esto la hora sale +3. */
 function formatFecha(iso: string): string {
   return formatFechaHoraAsuncion(iso);
@@ -131,6 +135,8 @@ interface VentaRow {
   id: string;
   numero_control: string;
   fecha: string;
+  moneda: string | null;
+  tipo_cambio: number | string | null;
   subtotal: number | string;
   monto_iva: number | string;
   total: number | string;
@@ -150,6 +156,7 @@ interface ItemRow {
   sku: string;
   cantidad: number | string;
   precio_venta: number | string;
+  precio_venta_original: number | string;
   total_linea: number | string;
 }
 
@@ -180,12 +187,21 @@ function renderCopia(opts: {
   const sectorBadge = tipo === "pizzeria" ? "COMANDA PIZZERÍA" : tipo === "plancha" ? "COMANDA PLANCHA" : "";
   const modalidad = modalidadLabel(brief?.modalidad);
 
+  // Moneda de la venta: en USD los importes del ticket van en dólares (precio
+  // que se le cotizó al cliente), con el equivalente en Gs. al pie. El monto en
+  // Gs. persistido es la base para el equivalente.
+  const esUsd = String(venta.moneda ?? "GS") === "USD";
+  const tc = Number(venta.tipo_cambio) || 1;
+  const money = (usd: number, gs: number) => (esUsd ? formatUsd(usd) : formatGs(gs));
+
   // Filas de ítems: en cliente todas; en cocina todas también, pero las del propio sector destacadas.
   const itemsHtml = items
     .map((it) => {
       const cant = Number(it.cantidad);
-      const punit = Number(it.precio_venta);
-      const sub = Number(it.total_linea);
+      const punitGs = Number(it.precio_venta);
+      const punitUsd = Number(it.precio_venta_original);
+      const subGs = Number(it.total_linea);
+      const subUsd = cant * punitUsd;
       const matchesSector =
         (tipo === "pizzeria" && it.sector === "pizzeria") ||
         (tipo === "plancha" && it.sector === "plancha");
@@ -194,9 +210,9 @@ function renderCopia(opts: {
         ? `<tr class="${cls}">
              <td class="qty"><strong>${cant}×</strong></td>
              <td class="name">${escapeHtml(it.producto_nombre)}</td>
-             <td class="amt">${formatGs(sub)}</td>
+             <td class="amt">${money(subUsd, subGs)}</td>
            </tr>
-           <tr class="sub"><td></td><td colspan="2">${cant} × ${formatGs(punit)}</td></tr>`
+           <tr class="sub"><td></td><td colspan="2">${cant} × ${money(punitUsd, punitGs)}</td></tr>`
         : `<tr class="${cls}">
              <td class="qty"><strong>${cant}×</strong></td>
              <td class="name" colspan="2"><strong>${escapeHtml(it.producto_nombre)}</strong></td>
@@ -208,6 +224,11 @@ function renderCopia(opts: {
   const subtotal = Number(venta.subtotal);
   const ivaTotal = Number(venta.monto_iva);
   const total = Number(venta.total);
+  // Totales en USD para el ticket: el TOTAL es la suma exacta de las líneas en
+  // dólares; subtotal e IVA se reparten en la misma proporción que en Gs.
+  const totalUsd = items.reduce((s, it) => s + Number(it.cantidad) * Number(it.precio_venta_original), 0);
+  const ivaUsd = total > 0 ? totalUsd * (ivaTotal / total) : 0;
+  const subtotalUsd = totalUsd - ivaUsd;
 
   const datosPedido: string[] = [];
   if (modalidad) {
@@ -227,9 +248,11 @@ function renderCopia(opts: {
     ? `<hr>
        <table class="totales">
          <tbody>
-           <tr><td class="lbl">Subtotal</td><td class="val">${formatGs(subtotal)}</td></tr>
-           ${ivaTotal > 0 ? `<tr><td class="lbl">IVA</td><td class="val">${formatGs(ivaTotal)}</td></tr>` : ""}
-           <tr class="total-row"><td class="lbl">TOTAL</td><td class="val">${formatGs(total)}</td></tr>
+           <tr><td class="lbl">Subtotal</td><td class="val">${money(subtotalUsd, subtotal)}</td></tr>
+           ${ivaTotal > 0 ? `<tr><td class="lbl">IVA</td><td class="val">${money(ivaUsd, ivaTotal)}</td></tr>` : ""}
+           <tr class="total-row"><td class="lbl">TOTAL</td><td class="val">${money(totalUsd, total)}</td></tr>
+           ${esUsd ? `<tr><td class="lbl">T/C</td><td class="val">${formatGs(tc)} / USD</td></tr>
+           <tr><td class="lbl">Equiv. Gs.</td><td class="val">${formatGs(total)}</td></tr>` : ""}
            <tr><td class="lbl">Pago</td><td class="val">${metodoPagoLabel(venta.metodo_pago)}</td></tr>
          </tbody>
        </table>`
@@ -360,7 +383,7 @@ export async function GET(request: NextRequest, ctxParams: { params: Promise<{ i
   // Venta
   const vQ = await ctx.supabase
     .from("ventas")
-    .select("id, numero_control, fecha, subtotal, monto_iva, total, observaciones, metodo_pago, cliente_id, genera_nota_remision, nota_remision_numero, estado, anulada_at, anulacion_motivo")
+    .select("id, numero_control, fecha, moneda, tipo_cambio, subtotal, monto_iva, total, observaciones, metodo_pago, cliente_id, genera_nota_remision, nota_remision_numero, estado, anulada_at, anulacion_motivo")
     .eq("id", id)
     .eq("empresa_id", empresaId)
     .maybeSingle();
@@ -385,7 +408,7 @@ export async function GET(request: NextRequest, ctxParams: { params: Promise<{ i
   // Items
   const iQ = await ctx.supabase
     .from("ventas_items")
-    .select("producto_id, producto_nombre, sku, cantidad, precio_venta, total_linea")
+    .select("producto_id, producto_nombre, sku, cantidad, precio_venta, precio_venta_original, total_linea")
     .eq("venta_id", id)
     .eq("empresa_id", empresaId);
   if (iQ.error) return new NextResponse(`Error items: ${iQ.error.message}`, { status: 500 });

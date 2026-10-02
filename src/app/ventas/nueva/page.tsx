@@ -1314,10 +1314,10 @@ export default function NuevaVentaPage() {
                           </td>
                           {/* Precio unitario editable (en la moneda de la venta) */}
                           <td className="px-3 py-2.5 text-right">
-                            <input
-                              type="number" min={0} step={moneda === "USD" ? "0.01" : "1"}
+                            <MontoInput
+                              decimals={moneda === "USD"}
                               value={moneda === "USD" ? item.precio_venta_original : item.precio_venta}
-                              onChange={(e) => setPrecioUnitario(idx, Number(e.target.value) || 0)}
+                              onChange={(n) => setPrecioUnitario(idx, n)}
                               disabled={esSalidaSinCargo(item.tipo_salida)}
                               title={esSalidaSinCargo(item.tipo_salida) ? "Muestra/regalo: el precio queda en 0" : (moneda === "USD" ? "Precio en USD" : undefined)}
                               className={`h-8 w-28 rounded-md border px-2 text-right text-sm tabular-nums ${

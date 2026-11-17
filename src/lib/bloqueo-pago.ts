@@ -9,7 +9,7 @@
  * PARA DESBLOQUEAR: poner `false`, commit + push a main y esperar el redeploy de Coolify.
  * No hay que tocar nada más (ni base, ni usuarios, ni variables de entorno).
  */
-export const ERP_BLOQUEADO_POR_FALTA_DE_PAGO = true;
+export const ERP_BLOQUEADO_POR_FALTA_DE_PAGO = false;
 
 export const BLOQUEO_PAGO_PATH = "/bloqueado";
 
